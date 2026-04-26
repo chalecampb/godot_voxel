@@ -119,6 +119,18 @@ Ref<ArrayMesh> build_mesh( //
 // Builds a triangles mesh resource from a single surface. If the surface is empty, returns null.
 Ref<ArrayMesh> build_mesh(Array surface);
 
+bool build_mesh_block_output(
+		VoxelMesher::Output &output,
+		VoxelData &data,
+		Ref<VoxelMesher> mesher,
+		Ref<VoxelGenerator> generator,
+		Vector3i mesh_block_position,
+		unsigned int mesh_block_size,
+		uint8_t lod_index,
+		bool collision_hint,
+		bool lod_hint
+);
+
 } // namespace zylann::voxel
 
 #endif // VOXEL_MESH_BLOCK_TASK_H

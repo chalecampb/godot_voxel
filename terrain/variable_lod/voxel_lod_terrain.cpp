@@ -23,6 +23,7 @@
 #include "../../util/godot/classes/shader.h"
 #include "../../util/godot/classes/viewport.h"
 #include "../../util/godot/core/array.h"
+#include "../../util/godot/core/packed_arrays.h"
 #include "../../util/godot/core/string.h"
 #include "../../util/math/color.h"
 #include "../../util/math/conv.h"
@@ -2553,6 +2554,9 @@ Array VoxelLodTerrain::get_mesh_block_surface(
 ) const {
 	ZN_PROFILE_SCOPE();
 
+	col_vertex_max = -1;
+	col_index_max = -1;
+
 	const int lod_count = get_lod_count();
 	ERR_FAIL_COND_V(lod_index < 0 || lod_index >= lod_count, Array());
 
@@ -2567,7 +2571,78 @@ Array VoxelLodTerrain::get_mesh_block_surface(
 	}
 
 	if (mesh.is_valid()) {
+		const VoxelMeshBlockVLT *block = mesh_map.get_block(block_pos);
+		ZN_ASSERT(block != nullptr);
+		col_vertex_max = block->col_vertex_end;
+		col_index_max = block->col_index_end;
 		return mesh->surface_get_arrays(0);
+	}
+
+	return Array();
+}
+
+Array VoxelLodTerrain::generate_mesh_block_surface_for_navigation(
+		const Vector3i block_pos,
+		const int lod_index,
+		int &col_vertex_max,
+		int &col_index_max
+) const {
+	ZN_PROFILE_SCOPE();
+
+	col_vertex_max = -1;
+	col_index_max = -1;
+
+	const int lod_count = get_lod_count();
+	ERR_FAIL_COND_V(lod_index < 0 || lod_index >= lod_count, Array());
+	ERR_FAIL_COND_V(_data == nullptr, Array());
+	ERR_FAIL_COND_V(_mesher.is_null(), Array());
+
+	VoxelMesher::Output output;
+	Ref<VoxelGenerator> generator = get_generator();
+	if (!build_mesh_block_output(
+				output,
+				*_data,
+				_mesher,
+				generator,
+				block_pos,
+				get_mesh_block_size(),
+				lod_index,
+				true,
+				true
+		)) {
+		return Array();
+	}
+
+	if (output.collision_surface.positions.size() > 0 && output.collision_surface.indices.size() > 0) {
+		PackedVector3Array vertices;
+		zylann::godot::copy_to(vertices, to_span_const(output.collision_surface.positions));
+
+		PackedInt32Array indices;
+		indices.resize(output.collision_surface.indices.size());
+		int32_t *indices_w = indices.ptrw();
+		for (unsigned int i = 0; i < output.collision_surface.indices.size(); ++i) {
+			indices_w[i] = output.collision_surface.indices[i];
+		}
+
+		Array arrays;
+		arrays.resize(Mesh::ARRAY_MAX);
+		arrays[Mesh::ARRAY_VERTEX] = vertices;
+		arrays[Mesh::ARRAY_INDEX] = indices;
+		return arrays;
+	}
+
+	if (output.surfaces.size() == 0) {
+		return Array();
+	}
+
+	for (const VoxelMesher::Output::Surface &surface : output.surfaces) {
+		if (surface.arrays.is_empty()) {
+			continue;
+		}
+
+		col_vertex_max = output.collision_surface.submesh_vertex_end;
+		col_index_max = output.collision_surface.submesh_index_end;
+		return surface.arrays;
 	}
 
 	return Array();

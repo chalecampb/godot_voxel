@@ -290,6 +290,71 @@ Ref<ArrayMesh> build_mesh(
 	return mesh;
 }
 
+bool build_mesh_block_output(
+		VoxelMesher::Output &output,
+		VoxelData &data,
+		Ref<VoxelMesher> mesher,
+		Ref<VoxelGenerator> generator,
+		Vector3i mesh_block_position,
+		unsigned int mesh_block_size,
+		uint8_t lod_index,
+		bool collision_hint,
+		bool lod_hint
+) {
+	ERR_FAIL_COND_V(mesher.is_null(), false);
+
+	const unsigned int data_block_size = data.get_block_size();
+	ERR_FAIL_COND_V(data_block_size == 0, false);
+	ERR_FAIL_COND_V(mesh_block_size < data_block_size, false);
+	ERR_FAIL_COND_V(mesh_block_size % data_block_size != 0, false);
+
+	const unsigned int mesh_to_data_factor = mesh_block_size / data_block_size;
+	ERR_FAIL_COND_V(mesh_to_data_factor != 1 && mesh_to_data_factor != 2, false);
+	const unsigned int data_box_size = mesh_to_data_factor + 2;
+	ERR_FAIL_COND_V(data_box_size * data_box_size * data_box_size > constants::MAX_BLOCK_COUNT_PER_REQUEST, false);
+
+	FixedArray<std::shared_ptr<VoxelBuffer>, constants::MAX_BLOCK_COUNT_PER_REQUEST> blocks;
+	const int mesh_to_data_factor_i = static_cast<int>(mesh_to_data_factor);
+	const int data_box_size_i = static_cast<int>(data_box_size);
+	const Box3i data_box(
+			mesh_block_position * mesh_to_data_factor_i - Vector3iUtil::create(1),
+			Vector3iUtil::create(data_box_size_i)
+	);
+	const unsigned int block_count = static_cast<unsigned int>(Vector3iUtil::get_volume_u64(data_box.size));
+	data.get_blocks_with_voxel_data(data_box, lod_index, to_span(blocks));
+	const unsigned int central_buffer_index = data_box_size * data_box_size + data_box_size + 1;
+	if (blocks[central_buffer_index] == nullptr && generator.is_null()) {
+		return false;
+	}
+
+	VoxelBuffer voxels(VoxelBuffer::ALLOCATOR_POOL);
+	copy_block_and_neighbors(
+			to_span(blocks, block_count),
+			voxels,
+			mesher->get_minimum_padding(),
+			mesher->get_maximum_padding(),
+			mesher->get_used_channels_mask(),
+			generator,
+			data,
+			lod_index,
+			mesh_block_position,
+			nullptr,
+			nullptr
+	);
+
+	const VoxelMesher::Input input{
+		voxels,
+		generator.ptr(),
+		mesh_block_position * static_cast<int>(mesh_block_size << lod_index),
+		lod_index,
+		collision_hint,
+		lod_hint,
+		false
+	};
+	mesher->build(output, input);
+	return true;
+}
+
 Ref<ArrayMesh> build_mesh(Array surface) {
 	if (surface.is_empty()) {
 		return Ref<ArrayMesh>();

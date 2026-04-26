@@ -41,6 +41,9 @@
 #include "terrain/variable_lod/voxel_lod_terrain.h"
 #include "terrain/voxel_a_star_grid_3d.h"
 #include "terrain/voxel_mesh_block.h"
+#include "terrain/voxel_nav_manager_3d.h"
+#include "terrain/voxel_nav_mesh_settings.h"
+#include "terrain/voxel_nav_region_3d.h"
 #include "terrain/voxel_save_completion_tracker.h"
 #include "terrain/voxel_viewer.h"
 #include "util/godot/check_ref_ownership.h"
@@ -122,6 +125,7 @@
 #include "editor/instancer/voxel_instancer_editor_plugin.h"
 #include "editor/multipass/voxel_generator_multipass_editor_plugin.h"
 #include "editor/spot_noise/spot_noise_editor_plugin.h"
+#include "editor/terrain/voxel_nav_editor_plugin.h"
 #include "editor/terrain/voxel_terrain_editor_plugin.h"
 #include "editor/vox/vox_editor_plugin.h"
 #include "util/godot/classes/os.h"
@@ -224,6 +228,7 @@ void print_size_reminders() {
 	ZN_PRINT_VERBOSE(format("Size of VoxelMeshBlock: {}", sizeof(VoxelMeshBlock)));
 	ZN_PRINT_VERBOSE(format("Size of VoxelTerrain: {}", sizeof(VoxelTerrain)));
 	ZN_PRINT_VERBOSE(format("Size of VoxelLodTerrain: {}", sizeof(VoxelLodTerrain)));
+	ZN_PRINT_VERBOSE(format("Size of VoxelNavManager3D: {}", sizeof(VoxelNavManager3D)));
 #ifdef VOXEL_ENABLE_INSTANCER
 	ZN_PRINT_VERBOSE(format("Size of VoxelInstancer: {}", sizeof(VoxelInstancer)));
 #endif
@@ -287,6 +292,9 @@ void initialize_voxel_module(ModuleInitializationLevel p_level) {
 		ClassDB::register_class<VoxelTerrain>();
 		ClassDB::register_class<VoxelLodTerrain>();
 		ClassDB::register_class<VoxelViewer>();
+		ClassDB::register_class<VoxelNavMeshSettings>();
+		ClassDB::register_class<VoxelNavRegion3D>();
+		ClassDB::register_class<VoxelNavManager3D>();
 
 		// Streams
 		ClassDB::register_abstract_class<VoxelStream>();
@@ -464,6 +472,7 @@ void initialize_voxel_module(ModuleInitializationLevel p_level) {
 		ClassDB::register_internal_class<ZN_SpotNoiseViewer>();
 
 		ClassDB::register_internal_class<VoxelAboutWindow>();
+		ClassDB::register_internal_class<VoxelNavEditorPlugin>();
 		ClassDB::register_internal_class<VoxelTerrainEditorInspectorPlugin>();
 		ClassDB::register_internal_class<VoxelTerrainEditorPlugin>();
 		ClassDB::register_internal_class<VoxelTerrainEditorTaskIndicator>();
@@ -521,6 +530,7 @@ void initialize_voxel_module(ModuleInitializationLevel p_level) {
 #endif // ZN_GODOT_EXTENSION
 
 		EditorPlugins::add_by_type<VoxelGraphEditorPlugin>();
+		EditorPlugins::add_by_type<VoxelNavEditorPlugin>();
 		EditorPlugins::add_by_type<VoxelTerrainEditorPlugin>();
 		EditorPlugins::add_by_type<ZN_FastNoiseLiteEditorPlugin>();
 		EditorPlugins::add_by_type<ZN_SpotNoiseEditorPlugin>();
