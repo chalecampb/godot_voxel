@@ -2,6 +2,7 @@
 #define VOXEL_NAV_REGION_3D_H
 
 #include "../util/godot/core/packed_arrays.h"
+#include "../util/godot/classes/node.h"
 #include "../util/math/vector3i.h"
 #include "../util/godot/classes/array_mesh.h"
 #include "voxel_nav_mesh_settings.h"
@@ -73,8 +74,11 @@ private:
 
 	bool update_source_from_properties();
 	VoxelLodTerrain *resolve_terrain() const;
+	VoxelLodTerrain *find_child_terrain(Node *node) const;
+	void update_block_position_from_transform();
 	Ref<ArrayMesh> create_source_mesh_from_lod0_collision() const;
 	void configure_navigation_mesh_bounds(Ref<NavigationMesh> navigation_mesh) const;
+	void update_navigation_server(Ref<NavigationMesh> navigation_mesh) const;
 
 	VoxelLodTerrain *_terrain = nullptr;
 	NodePath _terrain_path;

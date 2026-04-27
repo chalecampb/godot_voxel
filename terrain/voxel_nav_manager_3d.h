@@ -37,7 +37,6 @@ public:
 
 	void rebuild_regions();
 	void bake_navigation_meshes();
-	void clear_navigation_meshes();
 	void clear_regions();
 
 	int get_region_count() const;

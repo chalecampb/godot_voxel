@@ -1,9 +1,10 @@
 #include "voxel_nav_editor_plugin.h"
 
 #include "../../terrain/voxel_nav_manager_3d.h"
-#include "../../util/godot/classes/menu_button.h"
+#include "../../util/godot/classes/button.h"
+#include "../../util/godot/classes/h_box_container.h"
 #include "../../util/godot/classes/object.h"
-#include "../../util/godot/classes/popup_menu.h"
+#include "../../util/godot/core/string_name.h"
 #include "../../util/godot/core/string.h"
 
 #ifdef ZN_GODOT
@@ -12,24 +13,32 @@
 
 namespace zylann::voxel {
 
-namespace {
-enum MenuItemID { //
-	MENU_REBUILD_REGIONS,
-	MENU_BAKE_NAVIGATION_MESH,
-	MENU_CLEAR_NAVIGATION_MESH,
-	MENU_CLEAR_REGIONS
-};
-} // namespace
-
 VoxelNavEditorPlugin::VoxelNavEditorPlugin() {}
 
 void VoxelNavEditorPlugin::init() {
-	MenuButton *menu_button = memnew(MenuButton);
-	menu_button->set_text(ZN_TTR("Voxel Nav"));
-	menu_button->get_popup()->connect("id_pressed", callable_mp(this, &VoxelNavEditorPlugin::_on_menu_item_selected));
-	menu_button->hide();
-	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, menu_button);
-	_menu_button = menu_button;
+	HBoxContainer *button_bar = memnew(HBoxContainer);
+
+	Button *bake_button = memnew(Button);
+	bake_button->set_theme_type_variation(StringName("FlatButton"));
+	bake_button->set_toggle_mode(true);
+	bake_button->set_text(ZN_TTR("Bake Navigation Regions"));
+	bake_button->set_tooltip_text(ZN_TTR("Bake Navigation Regions"));
+	bake_button->connect("pressed", callable_mp(this, &VoxelNavEditorPlugin::_on_bake_button_pressed));
+	button_bar->add_child(bake_button);
+	_bake_button = bake_button;
+
+	Button *clear_button = memnew(Button);
+	clear_button->set_theme_type_variation(StringName("FlatButton"));
+	clear_button->set_text(ZN_TTR("Clear Navigation Regions"));
+	clear_button->set_tooltip_text(ZN_TTR("Clear Navigation Regions"));
+	clear_button->connect("pressed", callable_mp(this, &VoxelNavEditorPlugin::_on_clear_button_pressed));
+	button_bar->add_child(clear_button);
+	_clear_button = clear_button;
+
+	button_bar->hide();
+	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, button_bar);
+	_button_bar = button_bar;
+	update_button_icons();
 }
 
 void VoxelNavEditorPlugin::_notification(int what) {
@@ -44,15 +53,11 @@ bool VoxelNavEditorPlugin::_zn_handles(const Object *p_object) const {
 
 void VoxelNavEditorPlugin::_zn_edit(Object *p_object) {
 	_selected_object_id = p_object != nullptr ? p_object->get_instance_id() : ObjectID();
-	update_menu_label();
-	update_menu_items();
 }
 
 void VoxelNavEditorPlugin::_zn_make_visible(bool visible) {
-	_menu_button->set_visible(visible);
-	if (visible) {
-		update_menu_label();
-		update_menu_items();
+	if (_button_bar != nullptr) {
+		_button_bar->set_visible(visible);
 	}
 }
 
@@ -63,58 +68,34 @@ Object *VoxelNavEditorPlugin::get_selected_object() const {
 	return ObjectDB::get_instance(_selected_object_id);
 }
 
-void VoxelNavEditorPlugin::update_menu_label() {
-	if (_menu_button == nullptr) {
+void VoxelNavEditorPlugin::update_button_icons() {
+	if (_bake_button == nullptr || _clear_button == nullptr) {
 		return;
 	}
 
-	Object *selected_object = get_selected_object();
-	if (Object::cast_to<VoxelNavManager3D>(selected_object) != nullptr) {
-		_menu_button->set_text(VoxelNavManager3D::get_class_static());
-	} else {
-		_menu_button->set_text(ZN_TTR("Voxel Nav"));
-	}
+	zylann::godot::set_button_icon(*_bake_button, _bake_button->get_theme_icon("Bake", "EditorIcons"));
+	zylann::godot::set_button_icon(*_clear_button, _clear_button->get_theme_icon("Reload", "EditorIcons"));
 }
 
-void VoxelNavEditorPlugin::update_menu_items() {
-	if (_menu_button == nullptr) {
+void VoxelNavEditorPlugin::_on_bake_button_pressed() {
+	_bake_button->set_pressed(false);
+
+	VoxelNavManager3D *manager = Object::cast_to<VoxelNavManager3D>(get_selected_object());
+	if (manager == nullptr) {
 		return;
 	}
 
-	PopupMenu *popup = _menu_button->get_popup();
-	popup->clear();
-
-	Object *selected_object = get_selected_object();
-	if (Object::cast_to<VoxelNavManager3D>(selected_object) != nullptr) {
-		popup->add_item(ZN_TTR("Rebuild Regions (No Bake)"), MENU_REBUILD_REGIONS);
-		popup->add_item(ZN_TTR("Rebuild + Bake NavigationMesh"), MENU_BAKE_NAVIGATION_MESH);
-		popup->add_item(ZN_TTR("Clear NavigationMesh"), MENU_CLEAR_NAVIGATION_MESH);
-		popup->add_separator();
-		popup->add_item(ZN_TTR("Clear Regions"), MENU_CLEAR_REGIONS);
-	}
+	manager->rebuild_regions();
+	manager->bake_navigation_meshes();
 }
 
-void VoxelNavEditorPlugin::_on_menu_item_selected(int id) {
-	Object *selected_object = get_selected_object();
-
-	if (VoxelNavManager3D *manager = Object::cast_to<VoxelNavManager3D>(selected_object)) {
-		switch (id) {
-			case MENU_REBUILD_REGIONS:
-				manager->rebuild_regions();
-				break;
-			case MENU_BAKE_NAVIGATION_MESH:
-				manager->rebuild_regions();
-				manager->bake_navigation_meshes();
-				break;
-			case MENU_CLEAR_NAVIGATION_MESH:
-				manager->clear_navigation_meshes();
-				break;
-			case MENU_CLEAR_REGIONS:
-				manager->clear_regions();
-				break;
-		}
+void VoxelNavEditorPlugin::_on_clear_button_pressed() {
+	VoxelNavManager3D *manager = Object::cast_to<VoxelNavManager3D>(get_selected_object());
+	if (manager == nullptr) {
 		return;
 	}
+
+	manager->clear_regions();
 }
 
 void VoxelNavEditorPlugin::_bind_methods() {}

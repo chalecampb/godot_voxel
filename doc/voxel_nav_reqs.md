@@ -5,11 +5,13 @@ This document describes the current `VoxelNav` implementation requirements in co
 ## Goals
 
 - The system shall generate Godot `NavigationMesh` resources from voxel terrain collision geometry.
+- The system shall generate adjacent navigation regions that connect through Godot's normal navigation edge-connection system without manual editor nudging.
 - The system shall support smooth voxel terrains using Transvoxel/SDF meshing.
 - The system shall treat navigation input as LOD0 collision geometry, not viewer-dependent render geometry.
 - The system shall avoid creating navigation regions for terrain areas that cannot plausibly contain a surface.
 - The system shall move expensive voxel source mesh generation off the main thread where possible.
 - The system shall leave Godot `NavigationServer3D` baking on the main thread.
+- The system shall explicitly synchronize baked mesh changes back to `NavigationServer3D` so runtime and editor pathfinding observe the same region connectivity.
 
 ## Scene API
 
@@ -31,6 +33,7 @@ This document describes the current `VoxelNav` implementation requirements in co
 - `VoxelNavManager3D` shall discover, create, clear, and bake grids of `VoxelNavRegion3D` nodes.
 - `VoxelNavManager3D` shall search its child tree for `VoxelLodTerrain` nodes when building managed region grids.
 - `VoxelNavManager3D` shall own only the `VoxelNavRegion3D` nodes it generated.
+- `VoxelNavManager3D` shall mark generated regions so they can be recognized and cleared after editor reloads or stale manager state.
 - `VoxelNavManager3D` shall assign generated regions their terrain references, region coordinates, navigation layers, and nav mesh settings.
 - `VoxelNavManager3D` shall support rebuilding managed regions cheaply after terrain edits.
 - `VoxelNavManager3D` shall expose `nav_mesh_settings`.
@@ -40,6 +43,18 @@ This document describes the current `VoxelNav` implementation requirements in co
 - `VoxelNavManager3D` shall expose `fine_occupancy_enabled`.
 - `fine_occupancy_enabled == false` shall select coarse occupancy.
 - `fine_occupancy_enabled == true` shall select fine occupancy.
+- `VoxelNavManager3D::clear_regions()` shall remove generated child regions and clear their navigation meshes from the navigation server.
+- `VoxelNavManager3D::clear_regions()` shall also clear generated direct child regions that are not present in the manager's current retained region list.
+
+## Editor UI
+
+- `VoxelNavRegion3D` shall use the native `NavigationRegion3D` editor bake and clear toolbar actions.
+- The voxel editor plugin shall not add a separate `VoxelNavRegion3D` bake or clear menu when a region is selected.
+- `VoxelNavManager3D` shall expose direct toolbar buttons for baking and clearing generated navigation regions.
+- `VoxelNavManager3D` toolbar actions shall use the same flat button style as the native `NavigationRegion3D` editor actions.
+- `VoxelNavManager3D` toolbar actions shall use native editor icons rather than a dropdown menu.
+- `Bake Navigation Regions` shall rebuild generated regions and then bake them.
+- `Clear Navigation Regions` shall clear generated navigation meshes and remove generated region nodes.
 
 ## Region Layout
 
@@ -66,10 +81,35 @@ block_position = floor(terrain_local_origin / terrain.mesh_block_size)
 - A manager-generated nav region shall have its transform placed on this same derived grid.
 - A manager-generated nav region's derived `block_position` shall be aligned to the nav region size in mesh-block coordinates.
 - A manually placed nav region shall floor to the containing LOD0 mesh block.
-- A nav region's bake filter AABB shall match exactly the local voxel-space size of that region.
+- A nav region's final baked navigation mesh shall end exactly at the configured local X/Z region bounds.
+- A nav region's source geometry shall include enough neighboring terrain to let Godot bake walkable surface up to the configured region edge.
+- A nav region's source geometry border shall be at least one LOD0 mesh block on every side of the configured region.
+- A nav region's bake filter AABB shall be expanded on X/Z by the computed bake border size.
+- A nav region's `NavigationMesh.border_size` shall match the X/Z bake filter expansion so Godot cuts the final baked surface back to the configured region bounds.
+- The computed bake border size shall be:
+
+```text
+ceil(agent_radius / cell_size) * cell_size
+```
+
+- If `cell_size <= 0`, the computed bake border size shall be `0`.
+- `NavigationMesh.edge_max_error` shall not be allowed above `1.0` for voxel nav bakes, so tile-aligned border edges remain precise enough to connect.
 - A nav region's generated source mesh vertices shall be local to the nav region origin.
 - Terrain-relative grid derivation shall occur in terrain local space.
 - Voxel navigation shall assume terrain transforms are usable for stable terrain-local grid derivation.
+
+## Region Connectivity
+
+- `VoxelNavRegion3D` shall enable Godot navigation edge connections.
+- Adjacent generated regions shall be positioned so their configured bounds touch exactly in terrain-local space.
+- Adjacent generated regions shall produce matching final navmesh edges at their shared boundary.
+- Adjacent regions shall connect without moving, rotating, toggling, or otherwise editing the nodes after baking.
+- Moving a region in the editor may force Godot to rebuild links, but that shall not be required for baked voxel navigation to be usable.
+- After `NavigationServer3D::bake_from_source_geometry_data()` mutates a region's `NavigationMesh`, `VoxelNavRegion3D` shall submit its current global transform to the region RID with `NavigationServer3D::region_set_transform()`.
+- After submitting its current transform, `VoxelNavRegion3D` shall resubmit the mesh to the region RID with `NavigationServer3D::region_set_navigation_mesh()`.
+- After resubmitting a baked or cleared mesh, `VoxelNavRegion3D` shall force the navigation map to complete an update when the region has a valid navigation map.
+- The forced bake/clear update may temporarily disable region and map async iterations, but it shall restore the previous async settings immediately afterward.
+- Voxel navigation shall rely on Godot's derived map edge connections and shall not create persistent `NavigationLink3D` nodes or manual connection objects between adjacent regions.
 
 ## Occupancy Discovery
 
@@ -104,6 +144,7 @@ block_position = floor(terrain_local_origin / terrain.mesh_block_size)
 - Nav source generation shall use `VoxelData` blocks when they exist.
 - Nav source generation shall fall back to the terrain generator for missing voxel boxes.
 - Nav source generation shall operate per LOD0 mesh block, not by generating one monolithic dense buffer for the whole nav region.
+- Nav source generation shall include neighboring LOD0 mesh blocks around a region when needed for exact edge baking.
 - Nav source generation shall append per-block collision triangles into one source mesh per `VoxelNavRegion3D`.
 - Appended per-block vertices shall be offset into nav-region-local coordinates.
 - Nav source generation shall run in worker tasks before Godot navigation baking begins.
@@ -122,6 +163,10 @@ block_position = floor(terrain_local_origin / terrain.mesh_block_size)
 - Regions producing zero navigation polygons shall be removed from the manager's retained region list.
 - Generated `NavigationMesh` resources shall use settings from `VoxelNavMeshSettings` when available.
 - Generated regions shall apply the manager's `navigation_layers`.
+- Baking shall configure navmesh bounds before calling Godot's bake API.
+- Baking shall submit the current region transform and baked `NavigationMesh` to the region RID after Godot's bake API returns.
+- Baking shall force the navigation map to complete an update after the baked mesh is resubmitted.
+- Clearing a region's navigation mesh shall also submit the current transform and cleared mesh to the region RID, then force a completed navigation map update.
 
 ## Threading
 
@@ -184,7 +229,7 @@ classDiagram
     VoxelLodTerrain --> VoxelData : stores resident/edited data
     VoxelLodTerrain --> VoxelGenerator : generates missing data
     VoxelLodTerrain --> VoxelMesher : builds collision output
-    VoxelNavRegion3D --> NavigationServer3D : bakes final navmesh
+    VoxelNavRegion3D --> NavigationServer3D : bakes and resubmits final navmesh
 ```
 
 ## Pipeline
@@ -197,6 +242,7 @@ flowchart TD
     B --> C["Region determines its configured bake area"]
     C --> D["Region collects LOD0 collision source geometry"]
     D --> E["Region bakes NavigationMesh via NavigationServer3D"]
+    E --> F["Region submits its transform and baked mesh to its NavigationServer3D region RID"]
 ```
 
 ### Manager Grid Pipeline
@@ -212,7 +258,8 @@ flowchart TD
     G --> H["Worker tasks mesh LOD0 blocks using VoxelData plus generator fallback"]
     H --> I["Main thread assigns prebuilt source meshes to regions"]
     I --> J["Main thread bakes NavigationMesh via NavigationServer3D"]
-    J --> K["Manager removes empty/zero-polygon regions"]
+    J --> K["Each region submits its transform and baked mesh, then forces map update"]
+    K --> L["Manager removes empty/zero-polygon regions"]
 ```
 
 ## Non-Goals
@@ -223,6 +270,8 @@ flowchart TD
 - The system shall not silently skip large regions because they are expensive.
 - The system shall not create region nodes for known-empty occupancy results.
 - The system shall not require a hidden `MeshInstance3D` child to hold nav source geometry.
+- The system shall not require editor transform edits to make adjacent baked regions link.
+- The manager editor UI shall not use a dropdown for bake and clear actions.
 
 ## Known Constraints
 
@@ -232,4 +281,4 @@ flowchart TD
 - The manager-driven path is the intended optimized path for large grids and terrain-edit rebuilds.
 - The standalone `VoxelNavRegion3D` path is the intended ergonomic path for manually placed/local navigation areas.
 - Runtime edit invalidation is not fully specified in this document.
-- Custom nav bake bounds are not yet specified here beyond use of terrain `voxel_bounds`.
+- Custom nav bake bounds beyond the generated region grid are not yet specified here.

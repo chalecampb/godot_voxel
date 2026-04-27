@@ -4,7 +4,8 @@
 #include "../../util/godot/classes/editor_plugin.h"
 #include "../../util/godot/macros.h"
 
-ZN_GODOT_FORWARD_DECLARE(class MenuButton)
+ZN_GODOT_FORWARD_DECLARE(class Button)
+ZN_GODOT_FORWARD_DECLARE(class HBoxContainer)
 
 namespace zylann::voxel {
 
@@ -21,15 +22,17 @@ protected:
 private:
 	void init();
 	void _notification(int what);
-	void _on_menu_item_selected(int id);
+	void _on_bake_button_pressed();
+	void _on_clear_button_pressed();
 
 	Object *get_selected_object() const;
-	void update_menu_items();
-	void update_menu_label();
+	void update_button_icons();
 
 	static void _bind_methods();
 
-	MenuButton *_menu_button = nullptr;
+	HBoxContainer *_button_bar = nullptr;
+	Button *_bake_button = nullptr;
+	Button *_clear_button = nullptr;
 	ObjectID _selected_object_id = ObjectID();
 };
 

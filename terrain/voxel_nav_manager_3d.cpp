@@ -28,7 +28,9 @@ constexpr int COARSE_OCCUPANCY_TILE_REGIONS_PER_AXIS = 4;
 constexpr int FINE_OCCUPANCY_TILE_REGIONS_PER_AXIS = 1;
 constexpr int COARSE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS = 9;
 constexpr int FINE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS = 5;
+constexpr int NAV_SOURCE_BORDER_BLOCKS = 1;
 constexpr uint64_t SLOW_OCCUPANCY_TASK_LOG_THRESHOLD_MSEC = 100;
+constexpr const char *GENERATED_REGION_META_NAME = "voxel_nav_manager_generated";
 
 inline uint64_t get_ticks_msec() {
 	return Time::get_singleton()->get_ticks_msec();
@@ -339,9 +341,9 @@ public:
 		ZN_ASSERT_RETURN(region_size_blocks > 0);
 
 		const uint64_t time_before = get_ticks_msec();
-		for (int z = 0; z < region_size_blocks; ++z) {
-			for (int y = 0; y < region_size_blocks; ++y) {
-				for (int x = 0; x < region_size_blocks; ++x) {
+		for (int z = -NAV_SOURCE_BORDER_BLOCKS; z < region_size_blocks + NAV_SOURCE_BORDER_BLOCKS; ++z) {
+			for (int y = -NAV_SOURCE_BORDER_BLOCKS; y < region_size_blocks + NAV_SOURCE_BORDER_BLOCKS; ++y) {
+				for (int x = -NAV_SOURCE_BORDER_BLOCKS; x < region_size_blocks + NAV_SOURCE_BORDER_BLOCKS; ++x) {
 					const Vector3i block_offset(x, y, z);
 					const Vector3i block_position = region_block_position + block_offset;
 
@@ -830,14 +832,6 @@ void VoxelNavManager3D::bake_prebuilt_navigation_meshes() {
 	);
 }
 
-void VoxelNavManager3D::clear_navigation_meshes() {
-	for (VoxelNavRegion3D *region : _regions) {
-		if (region != nullptr && region->is_inside_tree()) {
-			region->clear_navigation_mesh();
-		}
-	}
-}
-
 void VoxelNavManager3D::clear_regions() {
 	++_region_rebuild_id;
 	_region_rebuild_in_progress = false;
@@ -870,12 +864,29 @@ void VoxelNavManager3D::clear_regions_internal() {
 		if (region == nullptr) {
 			continue;
 		}
-		if (region->get_parent() == this) {
-			remove_child(region);
+		if (region->is_inside_tree()) {
+			region->clear_navigation_mesh();
 		}
+		if (region->get_parent() != this) {
+			continue;
+		}
+		remove_child(region);
 		memdelete(region);
 	}
 	_regions.clear();
+
+	for (int i = get_child_count() - 1; i >= 0; --i) {
+		VoxelNavRegion3D *region = Object::cast_to<VoxelNavRegion3D>(get_child(i));
+		if (region == nullptr) {
+			continue;
+		}
+		if (!region->has_meta(GENERATED_REGION_META_NAME) && !String(region->get_name()).begins_with("VoxelNavRegion_")) {
+			continue;
+		}
+		region->clear_navigation_mesh();
+		remove_child(region);
+		memdelete(region);
+	}
 }
 
 int VoxelNavManager3D::get_region_count() const {
@@ -905,6 +916,7 @@ VoxelNavRegion3D *VoxelNavManager3D::create_region(VoxelLodTerrain &terrain, Vec
 	if (get_owner() != nullptr) {
 		region->set_owner(get_owner());
 	}
+	region->set_meta(GENERATED_REGION_META_NAME, true);
 	region->set_navigation_layers(_navigation_layers);
 
 	const float block_size = terrain.get_mesh_block_size();
@@ -953,7 +965,6 @@ void VoxelNavManager3D::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("rebuild_regions"), &Self::rebuild_regions);
 	ClassDB::bind_method(D_METHOD("bake_navigation_meshes"), &Self::bake_navigation_meshes);
-	ClassDB::bind_method(D_METHOD("clear_navigation_meshes"), &Self::clear_navigation_meshes);
 	ClassDB::bind_method(D_METHOD("clear_regions"), &Self::clear_regions);
 	ClassDB::bind_method(D_METHOD("get_region_count"), &Self::get_region_count);
 
