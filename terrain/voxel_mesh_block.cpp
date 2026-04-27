@@ -3,6 +3,7 @@
 #include "../util/godot/classes/collision_shape_3d.h"
 #include "../util/godot/classes/concave_polygon_shape_3d.h"
 #include "../util/godot/classes/node_3d.h"
+#include "../util/godot/core/packed_arrays.h"
 #include "../util/macros.h"
 #include "../util/profiling.h"
 #include "free_mesh_task.h"
@@ -221,51 +222,129 @@ Ref<ConcavePolygonShape3D> make_collision_shape_from_mesher_output(
 ) {
 	using namespace zylann::godot;
 
-	Ref<ConcavePolygonShape3D> shape;
+	PackedVector3Array vertices;
+	PackedInt32Array indices;
+	if (!get_collision_mesh_from_mesher_output(mesher_output, mesher, vertices, indices)) {
+		return Ref<ConcavePolygonShape3D>();
+	}
+
+	Array surface_arrays;
+	surface_arrays.resize(Mesh::ARRAY_MAX);
+	surface_arrays[Mesh::ARRAY_VERTEX] = vertices;
+	surface_arrays[Mesh::ARRAY_INDEX] = indices;
+	return create_concave_polygon_shape(surface_arrays, vertices.size(), indices.size());
+}
+
+bool get_collision_mesh_from_mesher_output(
+		const VoxelMesher::Output &mesher_output,
+		const VoxelMesher &mesher,
+		PackedVector3Array &out_vertices,
+		PackedInt32Array &out_indices
+) {
+	out_vertices.clear();
+	out_indices.clear();
 
 	if (mesher.is_generating_collision_surface()) {
 		if (mesher_output.collision_surface.submesh_vertex_end != -1) {
-			// Use a sub-region of the render mesh
-			if (mesher_output.surfaces.size() > 0) {
-				shape = create_concave_polygon_shape(
-						mesher_output.surfaces[0].arrays,
-						mesher_output.collision_surface.submesh_vertex_end,
-						mesher_output.collision_surface.submesh_index_end
-				);
+			if (mesher_output.surfaces.size() == 0) {
+				return false;
 			}
 
-		} else {
-			// Use specialized collision mesh
-			shape = create_concave_polygon_shape(
-					to_span(mesher_output.collision_surface.positions), to_span(mesher_output.collision_surface.indices)
-			);
+			const Array surface_arrays = mesher_output.surfaces[0].arrays;
+			if (surface_arrays.size() != Mesh::ARRAY_MAX) {
+				return false;
+			}
+
+			const PackedVector3Array vertices = surface_arrays[Mesh::ARRAY_VERTEX];
+			const PackedInt32Array indices = surface_arrays[Mesh::ARRAY_INDEX];
+			const int vertex_count = mesher_output.collision_surface.submesh_vertex_end;
+			const int index_count = mesher_output.collision_surface.submesh_index_end;
+			ERR_FAIL_COND_V(vertex_count < 0 || vertex_count > vertices.size(), false);
+			ERR_FAIL_COND_V(index_count < 0 || index_count > indices.size(), false);
+
+			out_vertices.resize(vertex_count);
+			{
+				Vector3 *dst = out_vertices.ptrw();
+				const Vector3 *src = vertices.ptr();
+				for (int i = 0; i < vertex_count; ++i) {
+					dst[i] = src[i];
+				}
+			}
+
+			out_indices.resize(index_count);
+			{
+				int32_t *dst = out_indices.ptrw();
+				const int32_t *src = indices.ptr();
+				for (int i = 0; i < index_count; ++i) {
+					dst[i] = src[i];
+				}
+			}
+
+			return out_vertices.size() >= 3 && out_indices.size() >= 3;
 		}
 
-	} else {
-		// Use render mesh
-		static const unsigned int MAX_STACK_SURFACES = 8;
-
-		if (mesher_output.surfaces.size() <= MAX_STACK_SURFACES) {
-			// Use stack
-			std::array<Array, MAX_STACK_SURFACES> render_surfaces_s;
-			for (unsigned int i = 0; i < mesher_output.surfaces.size(); ++i) {
-				render_surfaces_s[i] = mesher_output.surfaces[i].arrays;
-			}
-			Span<const Array> render_surfaces(render_surfaces_s.data(), mesher_output.surfaces.size());
-			shape = create_concave_polygon_shape(render_surfaces);
-
-		} else {
-			// Use heap
-			StdVector<Array> render_surfaces_h;
-			render_surfaces_h.reserve(mesher_output.surfaces.size());
-			for (const VoxelMesher::Output::Surface &surface : mesher_output.surfaces) {
-				render_surfaces_h.push_back(surface.arrays);
-			}
-			shape = create_concave_polygon_shape(to_span(render_surfaces_h));
+		if (mesher_output.collision_surface.positions.size() == 0 ||
+				mesher_output.collision_surface.indices.size() == 0) {
+			return false;
 		}
+
+		zylann::godot::copy_to(out_vertices, to_span_const(mesher_output.collision_surface.positions));
+		out_indices.resize(mesher_output.collision_surface.indices.size());
+		{
+			int32_t *dst = out_indices.ptrw();
+			for (unsigned int i = 0; i < mesher_output.collision_surface.indices.size(); ++i) {
+				dst[i] = mesher_output.collision_surface.indices[i];
+			}
+		}
+		return out_vertices.size() >= 3 && out_indices.size() >= 3;
 	}
 
-	return shape;
+	int vertex_count = 0;
+	int index_count = 0;
+	for (const VoxelMesher::Output::Surface &surface : mesher_output.surfaces) {
+		if (surface.arrays.size() == 0) {
+			continue;
+		}
+		ERR_FAIL_COND_V(surface.arrays.size() != Mesh::ARRAY_MAX, false);
+		const PackedVector3Array vertices = surface.arrays[Mesh::ARRAY_VERTEX];
+		const PackedInt32Array indices = surface.arrays[Mesh::ARRAY_INDEX];
+		vertex_count += vertices.size();
+		index_count += indices.size();
+	}
+
+	if (vertex_count < 3 || index_count < 3) {
+		return false;
+	}
+
+	out_vertices.resize(vertex_count);
+	out_indices.resize(index_count);
+	int vertex_offset = 0;
+	int index_offset = 0;
+	for (const VoxelMesher::Output::Surface &surface : mesher_output.surfaces) {
+		if (surface.arrays.size() == 0) {
+			continue;
+		}
+		const PackedVector3Array vertices = surface.arrays[Mesh::ARRAY_VERTEX];
+		const PackedInt32Array indices = surface.arrays[Mesh::ARRAY_INDEX];
+		{
+			Vector3 *dst = out_vertices.ptrw();
+			const Vector3 *src = vertices.ptr();
+			for (int i = 0; i < vertices.size(); ++i) {
+				dst[vertex_offset + i] = src[i];
+			}
+		}
+		{
+			int32_t *dst = out_indices.ptrw();
+			const int32_t *src = indices.ptr();
+			for (int i = 0; i < indices.size(); ++i) {
+				dst[index_offset + i] = vertex_offset + src[i];
+			}
+		}
+		vertex_offset += vertices.size();
+		index_offset += indices.size();
+	}
+
+	return true;
 }
 
 } // namespace zylann::voxel

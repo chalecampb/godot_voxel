@@ -105,6 +105,13 @@ Ref<ConcavePolygonShape3D> make_collision_shape_from_mesher_output(
 		const VoxelMesher &mesher
 );
 
+bool get_collision_mesh_from_mesher_output(
+		const VoxelMesher::Output &mesher_output,
+		const VoxelMesher &mesher,
+		PackedVector3Array &out_vertices,
+		PackedInt32Array &out_indices
+);
+
 } // namespace zylann::voxel
 
 #endif // VOXEL_MESH_BLOCK_H

@@ -283,11 +283,17 @@ public:
 			int &col_index_max
 	) const;
 
-	Array generate_mesh_block_surface_for_navigation(
-			const Vector3i block_pos,
-			const int lod_index,
-			int &col_vertex_max,
-			int &col_index_max
+	bool generate_lod0_collision_mesh_for_navigation_region(
+			Vector3i mesh_block_position,
+			unsigned int mesh_block_count_per_axis,
+			PackedVector3Array &out_vertices,
+			PackedInt32Array &out_indices
+	) const;
+
+	bool may_lod0_region_contain_surface_for_navigation(
+			Vector3i mesh_block_position,
+			unsigned int mesh_block_count_per_axis,
+			bool fine_occupancy
 	) const;
 
 	void get_meshed_block_positions_at_lod(int lod_index, StdVector<Vector3i> &out_positions) const;

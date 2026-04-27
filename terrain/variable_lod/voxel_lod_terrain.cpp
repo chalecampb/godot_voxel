@@ -27,6 +27,7 @@
 #include "../../util/godot/core/string.h"
 #include "../../util/math/color.h"
 #include "../../util/math/conv.h"
+#include "../../util/math/funcs.h"
 #include "../../util/profiling.h"
 #include "../../util/profiling_clock.h"
 #include "../../util/string/format.h"
@@ -34,6 +35,7 @@
 #include "../../util/thread/mutex.h"
 #include "../../util/thread/rw_lock.h"
 #include "../free_mesh_task.h"
+#include "../voxel_mesh_block.h"
 #include "../voxel_save_completion_tracker.h"
 #include "voxel_lod_terrain_update_task.h"
 
@@ -2581,71 +2583,193 @@ Array VoxelLodTerrain::get_mesh_block_surface(
 	return Array();
 }
 
-Array VoxelLodTerrain::generate_mesh_block_surface_for_navigation(
-		const Vector3i block_pos,
-		const int lod_index,
-		int &col_vertex_max,
-		int &col_index_max
+bool VoxelLodTerrain::generate_lod0_collision_mesh_for_navigation_region(
+		Vector3i mesh_block_position,
+		unsigned int mesh_block_count_per_axis,
+		PackedVector3Array &out_vertices,
+		PackedInt32Array &out_indices
 ) const {
 	ZN_PROFILE_SCOPE();
 
-	col_vertex_max = -1;
-	col_index_max = -1;
+	out_vertices.clear();
+	out_indices.clear();
 
-	const int lod_count = get_lod_count();
-	ERR_FAIL_COND_V(lod_index < 0 || lod_index >= lod_count, Array());
-	ERR_FAIL_COND_V(_data == nullptr, Array());
-	ERR_FAIL_COND_V(_mesher.is_null(), Array());
+	ERR_FAIL_COND_V(get_lod_count() == 0, false);
+	ERR_FAIL_COND_V(_data == nullptr, false);
+	ERR_FAIL_COND_V(_mesher.is_null(), false);
+	ERR_FAIL_COND_V(mesh_block_count_per_axis == 0, false);
+
+	Ref<VoxelGenerator> generator = get_generator();
+	ERR_FAIL_COND_V(generator.is_null(), false);
+
+	const int mesh_block_size = get_mesh_block_size();
+	const int mesh_block_count_per_axis_i = static_cast<int>(mesh_block_count_per_axis);
+	const int region_size_voxels = mesh_block_size * mesh_block_count_per_axis_i;
+	const int min_padding = _mesher->get_minimum_padding();
+	const int max_padding = _mesher->get_maximum_padding();
+
+	const uint64_t time_before = get_ticks_msec();
+	zylann::print_line(
+			format("VoxelLodTerrain: begin generator-only LOD0 collision nav source at block ({}, {}, {}), size {}x{}x{} blocks",
+				   mesh_block_position.x,
+				   mesh_block_position.y,
+				   mesh_block_position.z,
+				   mesh_block_count_per_axis_i,
+				   mesh_block_count_per_axis_i,
+				   mesh_block_count_per_axis_i)
+	);
+
+	VoxelBuffer voxels(VoxelBuffer::ALLOCATOR_POOL);
+	const VoxelFormat voxel_format = _data->get_format();
+	voxels.create(Vector3iUtil::create(region_size_voxels + min_padding + max_padding), &voxel_format);
+
+	VoxelGenerator::VoxelQueryData query{
+		voxels,
+		mesh_block_position * mesh_block_size - Vector3iUtil::create(min_padding),
+		0
+	};
+	generator->generate_block(query);
+	const uint64_t time_after_generate = get_ticks_msec();
+
+#ifdef VOXEL_ENABLE_MODIFIERS
+	const VoxelModifierStack &modifiers = _data->get_modifiers();
+	modifiers.apply(query.voxel_buffer, AABB(query.origin_in_voxels, query.voxel_buffer.get_size()));
+#endif
+	const uint64_t time_after_modifiers = get_ticks_msec();
 
 	VoxelMesher::Output output;
+	const VoxelMesher::Input input{
+		voxels,
+		generator.ptr(),
+		mesh_block_position * mesh_block_size,
+		0,
+		true,
+		false,
+		false
+	};
+	_mesher->build(output, input);
+	const uint64_t time_after_mesher = get_ticks_msec();
+	if (!get_collision_mesh_from_mesher_output(output, **_mesher, out_vertices, out_indices)) {
+		const uint64_t time_after_extract = get_ticks_msec();
+		zylann::print_line(
+				format("VoxelLodTerrain: end generator-only LOD0 collision nav source at block ({}, {}, {}): empty, generate={} ms modifiers={} ms mesher={} ms extract={} ms total={} ms",
+					   mesh_block_position.x,
+					   mesh_block_position.y,
+					   mesh_block_position.z,
+					   time_after_generate - time_before,
+					   time_after_modifiers - time_after_generate,
+					   time_after_mesher - time_after_modifiers,
+					   time_after_extract - time_after_mesher,
+					   time_after_extract - time_before)
+		);
+		return false;
+	}
+	const uint64_t time_after_extract = get_ticks_msec();
+
+	const bool has_mesh = out_vertices.size() >= 3 && out_indices.size() >= 3;
+	Vector3 min_vertex;
+	Vector3 max_vertex;
+	if (out_vertices.size() > 0) {
+		const Vector3 *vertices = out_vertices.ptr();
+		min_vertex = vertices[0];
+		max_vertex = vertices[0];
+		for (int i = 1; i < out_vertices.size(); ++i) {
+			min_vertex = min_vertex.min(vertices[i]);
+			max_vertex = max_vertex.max(vertices[i]);
+		}
+	}
+	const uint64_t time_after_aabb = get_ticks_msec();
+	zylann::print_line(
+			format("VoxelLodTerrain: end generator-only LOD0 collision nav source at block ({}, {}, {}): {} vertices, {} indices, local AABB pos=({}, {}, {}) size=({}, {}, {}), generate={} ms modifiers={} ms mesher={} ms extract={} ms aabb={} ms total={} ms",
+				   mesh_block_position.x,
+				   mesh_block_position.y,
+				   mesh_block_position.z,
+				   out_vertices.size(),
+				   out_indices.size(),
+				   min_vertex.x,
+				   min_vertex.y,
+				   min_vertex.z,
+				   max_vertex.x - min_vertex.x,
+				   max_vertex.y - min_vertex.y,
+				   max_vertex.z - min_vertex.z,
+				   time_after_generate - time_before,
+				   time_after_modifiers - time_after_generate,
+				   time_after_mesher - time_after_modifiers,
+				   time_after_extract - time_after_mesher,
+				   time_after_aabb - time_after_extract,
+				   time_after_aabb - time_before)
+	);
+	return has_mesh;
+}
+
+bool VoxelLodTerrain::may_lod0_region_contain_surface_for_navigation(
+		Vector3i mesh_block_position,
+		unsigned int mesh_block_count_per_axis,
+		bool fine_occupancy
+) const {
+	ZN_PROFILE_SCOPE();
+
+	ERR_FAIL_COND_V(get_lod_count() == 0, true);
+	ERR_FAIL_COND_V(_data == nullptr, true);
+	ERR_FAIL_COND_V(_mesher.is_null(), true);
+	ERR_FAIL_COND_V(mesh_block_count_per_axis == 0, true);
+
 	Ref<VoxelGenerator> generator = get_generator();
-	if (!build_mesh_block_output(
-				output,
-				*_data,
-				_mesher,
-				generator,
-				block_pos,
-				get_mesh_block_size(),
-				lod_index,
-				true,
-				true
-		)) {
-		return Array();
-	}
+	ERR_FAIL_COND_V(generator.is_null(), true);
 
-	if (output.collision_surface.positions.size() > 0 && output.collision_surface.indices.size() > 0) {
-		PackedVector3Array vertices;
-		zylann::godot::copy_to(vertices, to_span_const(output.collision_surface.positions));
+	const int mesh_block_size = get_mesh_block_size();
+	const int mesh_block_count_per_axis_i = static_cast<int>(mesh_block_count_per_axis);
+	const int probe_block_size = fine_occupancy ? mesh_block_size : mesh_block_size * mesh_block_count_per_axis_i;
+	const int probe_count_per_axis = fine_occupancy ? mesh_block_count_per_axis_i : 1;
+	const int target_samples_per_axis = fine_occupancy ? 5 : 9;
+	const int desired_step = math::max(1, math::ceildiv(probe_block_size, target_samples_per_axis - 1));
+	const unsigned int probe_step = math::max(
+			1u,
+			math::get_previous_power_of_two_32(static_cast<unsigned int>(desired_step))
+	);
+	const unsigned int probe_lod = math::get_shift_from_power_of_two_32(probe_step);
+	const int probe_voxel_step = 1 << probe_lod;
+	const float surface_threshold = 1.f;
 
-		PackedInt32Array indices;
-		indices.resize(output.collision_surface.indices.size());
-		int32_t *indices_w = indices.ptrw();
-		for (unsigned int i = 0; i < output.collision_surface.indices.size(); ++i) {
-			indices_w[i] = output.collision_surface.indices[i];
+	for (int z = 0; z < probe_count_per_axis; ++z) {
+		for (int y = 0; y < probe_count_per_axis; ++y) {
+			for (int x = 0; x < probe_count_per_axis; ++x) {
+				const Vector3i probe_block_offset = fine_occupancy ? Vector3i(x, y, z) : Vector3i();
+				const Vector3i probe_origin = (mesh_block_position + probe_block_offset) * mesh_block_size;
+				const int sample_count_axis = math::max(2, math::ceildiv(probe_block_size, probe_voxel_step) + 1);
+
+				VoxelBuffer voxels(VoxelBuffer::ALLOCATOR_POOL);
+				const VoxelFormat voxel_format = _data->get_format();
+				voxels.create(Vector3iUtil::create(sample_count_axis), &voxel_format);
+
+				VoxelGenerator::VoxelQueryData query{ voxels, probe_origin, probe_lod };
+				generator->generate_block(query);
+
+				bool has_positive = false;
+				bool has_negative = false;
+				for (int sz = 0; sz < sample_count_axis; ++sz) {
+					for (int sy = 0; sy < sample_count_axis; ++sy) {
+						for (int sx = 0; sx < sample_count_axis; ++sx) {
+							const float sdf = voxels.get_voxel_f(sx, sy, sz, VoxelBuffer::CHANNEL_SDF);
+							if (Math::abs(sdf) <= surface_threshold) {
+								return true;
+							}
+							if (sdf > 0.f) {
+								has_positive = true;
+							} else {
+								has_negative = true;
+							}
+							if (has_positive && has_negative) {
+								return true;
+							}
+						}
+					}
+				}
+			}
 		}
-
-		Array arrays;
-		arrays.resize(Mesh::ARRAY_MAX);
-		arrays[Mesh::ARRAY_VERTEX] = vertices;
-		arrays[Mesh::ARRAY_INDEX] = indices;
-		return arrays;
 	}
 
-	if (output.surfaces.size() == 0) {
-		return Array();
-	}
-
-	for (const VoxelMesher::Output::Surface &surface : output.surfaces) {
-		if (surface.arrays.is_empty()) {
-			continue;
-		}
-
-		col_vertex_max = output.collision_surface.submesh_vertex_end;
-		col_index_max = output.collision_surface.submesh_index_end;
-		return surface.arrays;
-	}
-
-	return Array();
+	return false;
 }
 
 void VoxelLodTerrain::get_meshed_block_positions_at_lod(int lod_index, StdVector<Vector3i> &out_positions) const {

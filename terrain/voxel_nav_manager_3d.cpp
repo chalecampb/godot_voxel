@@ -1,11 +1,22 @@
 #include "voxel_nav_manager_3d.h"
 
+#include "../engine/voxel_engine.h"
+#include "../generators/voxel_generator.h"
+#include "../meshers/mesh_block_task.h"
+#include "../storage/voxel_buffer.h"
+#include "../storage/voxel_data.h"
+#include "../storage/voxel_format.h"
+#include "../util/godot/classes/time.h"
 #include "../util/godot/core/class_db.h"
+#include "../util/godot/object_weak_ref.h"
 #include "../util/io/log.h"
 #include "../util/math/conv.h"
 #include "../util/math/box3i.h"
+#include "../util/math/funcs.h"
 #include "../util/string/format.h"
+#include "../util/tasks/threaded_task.h"
 #include "variable_lod/voxel_lod_terrain.h"
+#include "voxel_mesh_block.h"
 #include "voxel_nav_region_3d.h"
 
 namespace zylann::voxel {
@@ -13,8 +24,421 @@ namespace zylann::voxel {
 namespace {
 
 constexpr uint64_t MAX_REGIONS_TO_CREATE = 65536;
+constexpr int COARSE_OCCUPANCY_TILE_REGIONS_PER_AXIS = 4;
+constexpr int FINE_OCCUPANCY_TILE_REGIONS_PER_AXIS = 1;
+constexpr int COARSE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS = 9;
+constexpr int FINE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS = 5;
+constexpr uint64_t SLOW_OCCUPANCY_TASK_LOG_THRESHOLD_MSEC = 100;
+
+inline uint64_t get_ticks_msec() {
+	return Time::get_singleton()->get_ticks_msec();
+}
+
+unsigned int get_navigation_occupancy_probe_lod(int span_size_voxels, bool fine_occupancy) {
+	const int target_samples_per_axis =
+			fine_occupancy ? FINE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS : COARSE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS;
+	const int desired_step = math::max(1, math::ceildiv(span_size_voxels, target_samples_per_axis - 1));
+	const unsigned int previous_power_of_two =
+			math::max(1u, math::get_previous_power_of_two_32(static_cast<unsigned int>(desired_step)));
+	return math::get_shift_from_power_of_two_32(previous_power_of_two);
+}
+
+class SdfView {
+public:
+	SdfView(const VoxelBuffer &voxels) :
+			_size(voxels.get_size()),
+			_depth(voxels.get_channel_depth(VoxelBuffer::CHANNEL_SDF)),
+			_uniform(voxels.get_channel_compression(VoxelBuffer::CHANNEL_SDF) == VoxelBuffer::COMPRESSION_UNIFORM) {
+		if (_uniform) {
+			_uniform_value = voxels.get_voxel_f(0, 0, 0, VoxelBuffer::CHANNEL_SDF);
+			return;
+		}
+
+		switch (_depth) {
+			case VoxelBuffer::DEPTH_8_BIT:
+				ZN_ASSERT(voxels.get_channel_data_read_only(VoxelBuffer::CHANNEL_SDF, _data8));
+				break;
+
+			case VoxelBuffer::DEPTH_16_BIT:
+				ZN_ASSERT(voxels.get_channel_data_read_only(VoxelBuffer::CHANNEL_SDF, _data16));
+				break;
+
+			case VoxelBuffer::DEPTH_32_BIT:
+				ZN_ASSERT(voxels.get_channel_data_read_only(VoxelBuffer::CHANNEL_SDF, _data32));
+				break;
+
+			case VoxelBuffer::DEPTH_64_BIT:
+				ZN_ASSERT(voxels.get_channel_data_read_only(VoxelBuffer::CHANNEL_SDF, _data64));
+				break;
+
+			default:
+				ZN_CRASH();
+		}
+	}
+
+	inline float get(int x, int y, int z) const {
+		if (_uniform) {
+			return _uniform_value;
+		}
+
+		const unsigned int i = Vector3iUtil::get_zxy_index(x, y, z, _size.x, _size.y);
+		switch (_depth) {
+			case VoxelBuffer::DEPTH_8_BIT:
+				return s8_to_snorm(_data8[i]) * constants::QUANTIZED_SDF_8_BITS_SCALE_INV;
+
+			case VoxelBuffer::DEPTH_16_BIT:
+				return s16_to_snorm(_data16[i]) * constants::QUANTIZED_SDF_16_BITS_SCALE_INV;
+
+			case VoxelBuffer::DEPTH_32_BIT:
+				return _data32[i];
+
+			case VoxelBuffer::DEPTH_64_BIT:
+				return _data64[i];
+
+			default:
+				ZN_CRASH();
+		}
+		return 0.f;
+	}
+
+private:
+	const Vector3i _size;
+	const VoxelBuffer::Depth _depth;
+	const bool _uniform;
+	float _uniform_value = 0.f;
+	Span<const int8_t> _data8;
+	Span<const int16_t> _data16;
+	Span<const float> _data32;
+	Span<const double> _data64;
+};
 
 } // namespace
+
+class VoxelNavOccupancyTask : public IThreadedTask {
+public:
+	zylann::godot::ObjectWeakRef<VoxelNavManager3D> manager;
+	zylann::godot::ObjectWeakRef<VoxelLodTerrain> terrain;
+	Ref<VoxelGenerator> generator;
+	VoxelFormat voxel_format;
+	StdVector<Vector3i> occupied_block_positions;
+	uint32_t rebuild_id = 0;
+	Vector3i tile_region_position;
+	Vector3i tile_region_size;
+	int mesh_block_size = 0;
+	unsigned int region_size_blocks = 0;
+	bool fine_occupancy = false;
+	int skipped_empty_count = 0;
+	int checked_region_count = 0;
+	Vector3i sample_size;
+	uint64_t generate_time_msec = 0;
+	uint64_t scan_time_msec = 0;
+	uint64_t total_time_msec = 0;
+
+	void run(ThreadedTaskContext &ctx) override {
+		ZN_ASSERT_RETURN(generator.is_valid());
+		ZN_ASSERT_RETURN(region_size_blocks > 0);
+
+		const uint64_t time_before = get_ticks_msec();
+		checked_region_count = static_cast<int>(Vector3iUtil::get_volume_u64(tile_region_size));
+		occupied_block_positions.reserve(checked_region_count);
+
+		const int region_size_voxels = mesh_block_size * static_cast<int>(region_size_blocks);
+		const Vector3i tile_size_voxels = tile_region_size * region_size_voxels;
+		const unsigned int probe_lod = get_navigation_occupancy_probe_lod(
+				fine_occupancy ? mesh_block_size : region_size_voxels,
+				fine_occupancy
+		);
+		const int probe_voxel_step = 1 << probe_lod;
+		sample_size = Vector3i(
+				math::max(2, math::ceildiv(tile_size_voxels.x, probe_voxel_step) + 1),
+				math::max(2, math::ceildiv(tile_size_voxels.y, probe_voxel_step) + 1),
+				math::max(2, math::ceildiv(tile_size_voxels.z, probe_voxel_step) + 1)
+		);
+		const Vector3i tile_origin_voxels = tile_region_position * region_size_voxels;
+		const float surface_threshold = 1.f;
+
+		VoxelBuffer voxels(VoxelBuffer::ALLOCATOR_POOL);
+		voxels.create(sample_size, &voxel_format);
+		VoxelGenerator::VoxelQueryData query{ voxels, tile_origin_voxels, probe_lod };
+		generator->generate_block(query);
+		const uint64_t time_after_generate = get_ticks_msec();
+		generate_time_msec = time_after_generate - time_before;
+		const SdfView sdf_view(voxels);
+
+		for (int rz = 0; rz < tile_region_size.z; ++rz) {
+			for (int ry = 0; ry < tile_region_size.y; ++ry) {
+				for (int rx = 0; rx < tile_region_size.x; ++rx) {
+					const Vector3i region_offset(rx, ry, rz);
+					const Vector3i sample_min = (region_offset * region_size_voxels) >> probe_lod;
+					const Vector3i sample_max = Vector3i(
+							math::min(sample_size.x, math::ceildiv((rx + 1) * region_size_voxels, probe_voxel_step) + 1),
+							math::min(sample_size.y, math::ceildiv((ry + 1) * region_size_voxels, probe_voxel_step) + 1),
+							math::min(sample_size.z, math::ceildiv((rz + 1) * region_size_voxels, probe_voxel_step) + 1)
+					);
+
+					bool has_positive = false;
+					bool has_negative = false;
+					bool has_surface = false;
+					for (int sz = sample_min.z; sz < sample_max.z && !has_surface; ++sz) {
+						for (int sx = sample_min.x; sx < sample_max.x && !has_surface; ++sx) {
+							for (int sy = sample_min.y; sy < sample_max.y; ++sy) {
+								const float sdf = sdf_view.get(sx, sy, sz);
+								if (Math::abs(sdf) <= surface_threshold) {
+									has_surface = true;
+									break;
+								}
+								if (sdf > 0.f) {
+									has_positive = true;
+								} else {
+									has_negative = true;
+								}
+								if (has_positive && has_negative) {
+									has_surface = true;
+									break;
+								}
+							}
+						}
+					}
+
+					if (has_surface) {
+						occupied_block_positions.push_back((tile_region_position + region_offset) * region_size_blocks);
+					} else {
+						++skipped_empty_count;
+					}
+				}
+			}
+		}
+		const uint64_t time_after_scan = get_ticks_msec();
+		scan_time_msec = time_after_scan - time_after_generate;
+		total_time_msec = time_after_scan - time_before;
+	}
+
+	void apply_result() override {
+		const uint64_t apply_time_before = get_ticks_msec();
+		VoxelNavManager3D *manager_ptr = manager.get();
+		if (manager_ptr == nullptr) {
+			return;
+		}
+		if (manager_ptr->_region_rebuild_id != rebuild_id || !manager_ptr->_region_rebuild_in_progress) {
+			return;
+		}
+
+		manager_ptr->_region_probe_checked_count += checked_region_count;
+		manager_ptr->_region_probe_generate_time_msec += generate_time_msec;
+		manager_ptr->_region_probe_scan_time_msec += scan_time_msec;
+		manager_ptr->_region_probe_max_task_time_msec =
+				math::max(manager_ptr->_region_probe_max_task_time_msec, total_time_msec);
+		if (total_time_msec >= SLOW_OCCUPANCY_TASK_LOG_THRESHOLD_MSEC) {
+			++manager_ptr->_region_probe_slow_task_count;
+			zylann::print_line(format(
+					"VoxelNavManager3D: slow occupancy tile pos=({}, {}, {}) size=({}, {}, {}) samples=({}, {}, {}) checked={} occupied={} generate={} ms scan={} ms total={} ms",
+					tile_region_position.x,
+					tile_region_position.y,
+					tile_region_position.z,
+					tile_region_size.x,
+					tile_region_size.y,
+					tile_region_size.z,
+					sample_size.x,
+					sample_size.y,
+					sample_size.z,
+					checked_region_count,
+					occupied_block_positions.size(),
+					generate_time_msec,
+					scan_time_msec,
+					total_time_msec
+			));
+		}
+
+		VoxelLodTerrain *terrain_ptr = terrain.get();
+		if (terrain_ptr == nullptr) {
+			manager_ptr->_region_probe_skipped_empty_count += checked_region_count;
+		} else {
+			manager_ptr->_region_probe_skipped_empty_count += skipped_empty_count;
+
+			for (const Vector3i block_position : occupied_block_positions) {
+				VoxelNavRegion3D *region = manager_ptr->create_region(*terrain_ptr, block_position);
+				if (region != nullptr) {
+					manager_ptr->_regions.push_back(region);
+				} else {
+					++manager_ptr->_region_probe_failed_create_count;
+				}
+			}
+		}
+		manager_ptr->_region_probe_apply_time_msec += get_ticks_msec() - apply_time_before;
+
+		--manager_ptr->_pending_region_probe_task_count;
+		if (manager_ptr->_pending_region_probe_task_count == 0) {
+			manager_ptr->_region_rebuild_in_progress = false;
+			if (manager_ptr->_region_probe_failed_create_count > 0) {
+				zylann::print_line(format(
+						"VoxelNavManager3D: skipped {} occupied region candidate(s) that could not be initialized",
+						manager_ptr->_region_probe_failed_create_count
+				));
+			}
+			if (manager_ptr->_region_probe_skipped_empty_count > 0) {
+				zylann::print_line(format(
+						"VoxelNavManager3D: skipped {} / {} empty region(s) by {} threaded occupancy probe",
+						manager_ptr->_region_probe_skipped_empty_count,
+						manager_ptr->_region_probe_checked_count,
+						manager_ptr->_fine_occupancy_enabled ? "fine" : "coarse"
+				));
+			}
+			zylann::print_line(format(
+					"VoxelNavManager3D: occupancy summary tasks={}, checked={}, occupied={}, skipped_empty={}, slow_tasks={}, worker_generate={} ms, worker_scan={} ms, main_apply={} ms, max_task={} ms",
+					manager_ptr->_region_probe_task_count,
+					manager_ptr->_region_probe_checked_count,
+					manager_ptr->_region_probe_checked_count - manager_ptr->_region_probe_skipped_empty_count,
+					manager_ptr->_region_probe_skipped_empty_count,
+					manager_ptr->_region_probe_slow_task_count,
+					manager_ptr->_region_probe_generate_time_msec,
+					manager_ptr->_region_probe_scan_time_msec,
+					manager_ptr->_region_probe_apply_time_msec,
+					manager_ptr->_region_probe_max_task_time_msec
+			));
+			zylann::print_line(format(
+					"VoxelNavManager3D: rebuilt {} navigation region(s)",
+					manager_ptr->_regions.size()
+			));
+
+			if (manager_ptr->_bake_requested_after_region_rebuild) {
+				manager_ptr->_bake_requested_after_region_rebuild = false;
+				if (manager_ptr->_regions.size() > 0) {
+					manager_ptr->bake_navigation_meshes();
+				} else {
+					zylann::print_line("VoxelNavManager3D: no occupied navigation region(s) to bake");
+				}
+			}
+		}
+	}
+
+	const char *get_debug_name() const override {
+		return "VoxelNavOccupancy";
+	}
+};
+
+class VoxelNavSourceMeshTask : public IThreadedTask {
+public:
+	zylann::godot::ObjectWeakRef<VoxelNavManager3D> manager;
+	zylann::godot::ObjectWeakRef<VoxelNavRegion3D> region;
+	std::shared_ptr<VoxelData> data;
+	Ref<VoxelMesher> mesher;
+	Ref<VoxelGenerator> generator;
+	Vector3i region_block_position;
+	uint32_t generation_id = 0;
+	int mesh_block_size = 0;
+	int region_size_blocks = 0;
+	PackedVector3Array vertices;
+	PackedInt32Array indices;
+	uint64_t worker_time_msec = 0;
+	int meshed_block_count = 0;
+	int empty_block_count = 0;
+
+	void run(ThreadedTaskContext &ctx) override {
+		ZN_ASSERT_RETURN(data != nullptr);
+		ZN_ASSERT_RETURN(mesher.is_valid());
+		ZN_ASSERT_RETURN(region_size_blocks > 0);
+
+		const uint64_t time_before = get_ticks_msec();
+		for (int z = 0; z < region_size_blocks; ++z) {
+			for (int y = 0; y < region_size_blocks; ++y) {
+				for (int x = 0; x < region_size_blocks; ++x) {
+					const Vector3i block_offset(x, y, z);
+					const Vector3i block_position = region_block_position + block_offset;
+
+					VoxelMesher::Output output;
+					if (!build_mesh_block_output(
+								output,
+								*data,
+								mesher,
+								generator,
+								block_position,
+								mesh_block_size,
+								0,
+								true,
+								false
+						)) {
+						++empty_block_count;
+						continue;
+					}
+
+					PackedVector3Array block_vertices;
+					PackedInt32Array block_indices;
+					if (!get_collision_mesh_from_mesher_output(output, **mesher, block_vertices, block_indices)) {
+						++empty_block_count;
+						continue;
+					}
+
+					const int vertex_offset = vertices.size();
+					const int previous_vertex_count = vertices.size();
+					const int previous_index_count = indices.size();
+					vertices.resize(previous_vertex_count + block_vertices.size());
+					indices.resize(previous_index_count + block_indices.size());
+
+					const Vector3 local_offset = to_vec3(block_offset * mesh_block_size);
+					Vector3 *vertices_w = vertices.ptrw();
+					const Vector3 *block_vertices_r = block_vertices.ptr();
+					for (int i = 0; i < block_vertices.size(); ++i) {
+						vertices_w[previous_vertex_count + i] = block_vertices_r[i] + local_offset;
+					}
+
+					int32_t *indices_w = indices.ptrw();
+					const int32_t *block_indices_r = block_indices.ptr();
+					for (int i = 0; i < block_indices.size(); ++i) {
+						indices_w[previous_index_count + i] = block_indices_r[i] + vertex_offset;
+					}
+
+					++meshed_block_count;
+				}
+			}
+		}
+		worker_time_msec = get_ticks_msec() - time_before;
+	}
+
+	void apply_result() override {
+		const uint64_t apply_time_before = get_ticks_msec();
+		VoxelNavManager3D *manager_ptr = manager.get();
+		if (manager_ptr == nullptr) {
+			return;
+		}
+		if (manager_ptr->_nav_source_generation_id != generation_id || !manager_ptr->_nav_source_generation_in_progress) {
+			return;
+		}
+
+		manager_ptr->_nav_source_worker_time_msec += worker_time_msec;
+		manager_ptr->_nav_source_meshed_block_count += meshed_block_count;
+		manager_ptr->_nav_source_empty_block_count += empty_block_count;
+		manager_ptr->_nav_source_max_task_time_msec =
+				math::max(manager_ptr->_nav_source_max_task_time_msec, worker_time_msec);
+
+		VoxelNavRegion3D *region_ptr = region.get();
+		if (region_ptr == nullptr || vertices.size() < 3 || indices.size() < 3) {
+			++manager_ptr->_nav_source_empty_count;
+		} else {
+			region_ptr->set_source_mesh_from_collision_arrays(vertices, indices, worker_time_msec);
+		}
+		manager_ptr->_nav_source_apply_time_msec += get_ticks_msec() - apply_time_before;
+
+		--manager_ptr->_pending_nav_source_task_count;
+		if (manager_ptr->_pending_nav_source_task_count == 0) {
+			manager_ptr->_nav_source_generation_in_progress = false;
+			zylann::print_line(format(
+					"VoxelNavManager3D: source mesh summary tasks={}, empty_regions={}, meshed_blocks={}, empty_blocks={}, worker_total={} ms, apply_total={} ms, max_task={} ms",
+					manager_ptr->_nav_source_task_count,
+					manager_ptr->_nav_source_empty_count,
+					manager_ptr->_nav_source_meshed_block_count,
+					manager_ptr->_nav_source_empty_block_count,
+					manager_ptr->_nav_source_worker_time_msec,
+					manager_ptr->_nav_source_apply_time_msec,
+					manager_ptr->_nav_source_max_task_time_msec
+			));
+			manager_ptr->bake_prebuilt_navigation_meshes();
+		}
+	}
+
+	const char *get_debug_name() const override {
+		return "VoxelNavSourceMesh";
+	}
+};
 
 VoxelNavManager3D::VoxelNavManager3D() {}
 
@@ -84,12 +508,47 @@ int VoxelNavManager3D::get_region_size_power() const {
 	return _region_size_power;
 }
 
+void VoxelNavManager3D::set_fine_occupancy_enabled(bool enabled) {
+	_fine_occupancy_enabled = enabled;
+}
+
+bool VoxelNavManager3D::is_fine_occupancy_enabled() const {
+	return _fine_occupancy_enabled;
+}
+
 void VoxelNavManager3D::rebuild_regions() {
-	clear_regions();
+	++_region_rebuild_id;
+	_region_rebuild_in_progress = false;
+	_bake_requested_after_region_rebuild = false;
+	_pending_region_probe_task_count = 0;
+	_region_probe_task_count = 0;
+	_region_probe_checked_count = 0;
+	_region_probe_skipped_empty_count = 0;
+	_region_probe_failed_create_count = 0;
+	_region_probe_generate_time_msec = 0;
+	_region_probe_scan_time_msec = 0;
+	_region_probe_apply_time_msec = 0;
+	_region_probe_max_task_time_msec = 0;
+	_region_probe_slow_task_count = 0;
+	++_nav_source_generation_id;
+	_nav_source_generation_in_progress = false;
+	_pending_nav_source_task_count = 0;
+	_nav_source_task_count = 0;
+	_nav_source_empty_count = 0;
+	_nav_source_meshed_block_count = 0;
+	_nav_source_empty_block_count = 0;
+	_nav_source_worker_time_msec = 0;
+	_nav_source_apply_time_msec = 0;
+	_nav_source_max_task_time_msec = 0;
+
+	clear_regions_internal();
 
 	StdVector<VoxelLodTerrain *> terrains;
 	collect_voxel_lod_terrains(this, terrains);
 	zylann::print_line(format("VoxelNavManager3D: found {} VoxelLodTerrain node(s)", terrains.size()));
+
+	StdVector<IThreadedTask *> tasks;
+	const uint32_t rebuild_id = _region_rebuild_id;
 
 	for (VoxelLodTerrain *terrain : terrains) {
 		const int mesh_block_size = terrain->get_mesh_block_size();
@@ -129,50 +588,245 @@ void VoxelNavManager3D::rebuild_regions() {
 			continue;
 		}
 
-		int skipped_empty_region_count = 0;
-		region_bounds.for_each_cell([this, terrain, region_size_blocks, &skipped_empty_region_count](Vector3i region_position) {
-			const Vector3i block_position = region_position * region_size_blocks;
-			VoxelNavRegion3D *region = create_region(*terrain, block_position);
-			if (region != nullptr) {
-				_regions.push_back(region);
-			} else {
-				++skipped_empty_region_count;
+		Ref<VoxelGenerator> generator = terrain->get_generator();
+		if (generator.is_null()) {
+			ZN_PRINT_WARNING("VoxelNavManager3D: skipped terrain because it has no generator");
+			continue;
+		}
+
+		const VoxelFormat voxel_format = terrain->get_storage().get_format();
+		const int tile_region_size_axis =
+				_fine_occupancy_enabled ? FINE_OCCUPANCY_TILE_REGIONS_PER_AXIS : COARSE_OCCUPANCY_TILE_REGIONS_PER_AXIS;
+		const Vector3i region_end = region_bounds.position + region_bounds.size;
+
+		for (int z = region_bounds.position.z; z < region_end.z; z += tile_region_size_axis) {
+			for (int y = region_bounds.position.y; y < region_end.y; y += tile_region_size_axis) {
+				for (int x = region_bounds.position.x; x < region_end.x; x += tile_region_size_axis) {
+					const Vector3i tile_region_position(x, y, z);
+					const Vector3i tile_region_size(
+							math::min(tile_region_size_axis, region_end.x - x),
+							math::min(tile_region_size_axis, region_end.y - y),
+							math::min(tile_region_size_axis, region_end.z - z)
+					);
+
+					VoxelNavOccupancyTask *task = ZN_NEW(VoxelNavOccupancyTask);
+					task->manager.set(this);
+					task->terrain.set(terrain);
+					task->generator = generator;
+					task->voxel_format = voxel_format;
+					task->tile_region_position = tile_region_position;
+					task->tile_region_size = tile_region_size;
+					task->rebuild_id = rebuild_id;
+					task->mesh_block_size = mesh_block_size;
+					task->region_size_blocks = region_size_blocks;
+					task->fine_occupancy = _fine_occupancy_enabled;
+					tasks.push_back(task);
+				}
 			}
-		});
-		if (skipped_empty_region_count > 0) {
-			zylann::print_line(
-					format("VoxelNavManager3D: skipped {} empty region(s) with no mesh data", skipped_empty_region_count)
-			);
 		}
 	}
-	zylann::print_line(format("VoxelNavManager3D: rebuilt {} navigation region(s)", _regions.size()));
+
+	if (tasks.size() == 0) {
+		zylann::print_line("VoxelNavManager3D: rebuilt 0 navigation region(s)");
+		return;
+	}
+
+	_region_rebuild_in_progress = true;
+	_pending_region_probe_task_count = tasks.size();
+	_region_probe_task_count = tasks.size();
+	zylann::print_line(format(
+			"VoxelNavManager3D: scheduled {} threaded {} occupancy tile task(s), tile_regions_per_axis={}. If this line is absent before baking, existing region nodes were reused and occupancy did not run.",
+			tasks.size(),
+			_fine_occupancy_enabled ? "fine" : "coarse",
+			_fine_occupancy_enabled ? FINE_OCCUPANCY_TILE_REGIONS_PER_AXIS : COARSE_OCCUPANCY_TILE_REGIONS_PER_AXIS
+	));
+	VoxelEngine::get_singleton().push_async_tasks(to_span(tasks));
 }
 
 void VoxelNavManager3D::bake_navigation_meshes() {
-	if (_regions.size() == 0) {
-		rebuild_regions();
+	if (_nav_source_generation_in_progress) {
+		zylann::print_line("VoxelNavManager3D: nav source mesh generation is already in progress");
+		return;
 	}
 
+	if (_region_rebuild_in_progress) {
+		_bake_requested_after_region_rebuild = true;
+		zylann::print_line("VoxelNavManager3D: delaying navmesh bake until threaded region rebuild completes");
+		return;
+	}
+
+	if (_regions.size() == 0) {
+		rebuild_regions();
+		if (_region_rebuild_in_progress) {
+			_bake_requested_after_region_rebuild = true;
+			zylann::print_line("VoxelNavManager3D: delaying navmesh bake until threaded region rebuild completes");
+			return;
+		}
+	}
+
+	schedule_navigation_source_mesh_tasks();
+}
+
+void VoxelNavManager3D::schedule_navigation_source_mesh_tasks() {
+	++_nav_source_generation_id;
+	_nav_source_generation_in_progress = false;
+	_pending_nav_source_task_count = 0;
+	_nav_source_task_count = 0;
+	_nav_source_empty_count = 0;
+	_nav_source_meshed_block_count = 0;
+	_nav_source_empty_block_count = 0;
+	_nav_source_worker_time_msec = 0;
+	_nav_source_apply_time_msec = 0;
+	_nav_source_max_task_time_msec = 0;
+
+	StdVector<IThreadedTask *> tasks;
+	const uint32_t generation_id = _nav_source_generation_id;
+	const int region_size_blocks = 1 << _region_size_power;
+
+	for (VoxelNavRegion3D *region : _regions) {
+		if (region == nullptr || !region->is_inside_tree()) {
+			continue;
+		}
+		region->clear_source_mesh();
+		VoxelLodTerrain *terrain = region->get_terrain();
+		if (terrain == nullptr) {
+			++_nav_source_empty_count;
+			continue;
+		}
+		Ref<VoxelMesher> mesher = terrain->get_mesher();
+		if (mesher.is_null()) {
+			++_nav_source_empty_count;
+			continue;
+		}
+		std::shared_ptr<VoxelData> data = terrain->get_storage_shared();
+		if (data == nullptr) {
+			++_nav_source_empty_count;
+			continue;
+		}
+
+		VoxelNavSourceMeshTask *task = ZN_NEW(VoxelNavSourceMeshTask);
+		task->manager.set(this);
+		task->region.set(region);
+		task->data = data;
+		task->mesher = mesher;
+		task->generator = terrain->get_generator();
+		task->region_block_position = region->get_block_position();
+		task->generation_id = generation_id;
+		task->mesh_block_size = terrain->get_mesh_block_size();
+		task->region_size_blocks = region_size_blocks;
+		tasks.push_back(task);
+	}
+
+	if (tasks.size() == 0) {
+		bake_prebuilt_navigation_meshes();
+		return;
+	}
+
+	_nav_source_generation_in_progress = true;
+	_pending_nav_source_task_count = tasks.size();
+	_nav_source_task_count = tasks.size();
+	zylann::print_line(format(
+			"VoxelNavManager3D: scheduled {} threaded nav source mesh task(s), region_size_blocks={}",
+			tasks.size(),
+			region_size_blocks
+	));
+	VoxelEngine::get_singleton().push_async_tasks(to_span(tasks));
+}
+
+void VoxelNavManager3D::bake_prebuilt_navigation_meshes() {
+	if (_nav_source_generation_in_progress) {
+		return;
+	}
+
+	zylann::print_line(format("VoxelNavManager3D: baking {} navigation region(s)", _regions.size()));
+	const uint64_t bake_time_before = get_ticks_msec();
+	const unsigned int initial_region_count = _regions.size();
 	int baked_count = 0;
 	int polygon_count = 0;
-	for (VoxelNavRegion3D *region : _regions) {
+	int removed_empty_region_count = 0;
+	uint64_t bake_region_total_time_msec = 0;
+	uint64_t bake_region_max_time_msec = 0;
+	uint64_t bake_source_mesh_total_time_msec = 0;
+	uint64_t bake_source_geometry_total_time_msec = 0;
+	uint64_t bake_navigation_server_total_time_msec = 0;
+	for (unsigned int region_index = 0; region_index < _regions.size(); ++region_index) {
+		VoxelNavRegion3D *region = _regions[region_index];
 		if (region != nullptr && region->is_inside_tree()) {
-			region->bake_navigation_mesh();
+			const uint64_t region_bake_time_before = get_ticks_msec();
+			if (region_index == 0 || (region_index % 16) == 0) {
+				const Vector3i block_position = region->get_block_position();
+				zylann::print_line(
+						format("VoxelNavManager3D: baking region {} / {} at block ({}, {}, {})",
+							   region_index + 1,
+							   _regions.size(),
+							   block_position.x,
+							   block_position.y,
+							   block_position.z)
+				);
+			}
+			region->bake_navigation_mesh_from_current_source();
 			Ref<NavigationMesh> navigation_mesh = region->get_navigation_mesh();
+			int region_polygon_count = 0;
 			if (navigation_mesh.is_valid()) {
-				const int region_polygon_count = navigation_mesh->get_polygon_count();
+				region_polygon_count = navigation_mesh->get_polygon_count();
 				if (region_polygon_count > 0) {
 					++baked_count;
 					polygon_count += region_polygon_count;
 				}
 			}
+			const uint64_t region_bake_time = get_ticks_msec() - region_bake_time_before;
+			bake_region_total_time_msec += region_bake_time;
+			bake_region_max_time_msec = math::max(bake_region_max_time_msec, region_bake_time);
+			bake_source_mesh_total_time_msec += region->get_last_source_mesh_time_msec();
+			bake_source_geometry_total_time_msec += region->get_last_source_geometry_time_msec();
+			bake_navigation_server_total_time_msec += region->get_last_navigation_bake_time_msec();
+			if (region_bake_time >= 500) {
+				const Vector3i block_position = region->get_block_position();
+				zylann::print_line(format(
+						"VoxelNavManager3D: slow bake region block=({}, {}, {}) polygons={} source_mesh={} ms source_geometry={} ms nav_server={} ms total={} ms",
+						block_position.x,
+						block_position.y,
+						block_position.z,
+						region_polygon_count,
+						region->get_last_source_mesh_time_msec(),
+						region->get_last_source_geometry_time_msec(),
+						region->get_last_navigation_bake_time_msec(),
+						region_bake_time
+				));
+			}
+			if (!region->has_source_mesh() || region_polygon_count == 0) {
+				if (region->get_parent() == this) {
+					remove_child(region);
+				}
+				memdelete(region);
+				_regions[region_index] = nullptr;
+				++removed_empty_region_count;
+			}
 		}
 	}
+	if (removed_empty_region_count > 0) {
+		StdVector<VoxelNavRegion3D *> kept_regions;
+		kept_regions.reserve(_regions.size() - removed_empty_region_count);
+		for (VoxelNavRegion3D *region : _regions) {
+			if (region != nullptr) {
+				kept_regions.push_back(region);
+			}
+		}
+		_regions.swap(kept_regions);
+		zylann::print_line(format("VoxelNavManager3D: removed {} empty navigation region candidate(s)", removed_empty_region_count));
+	}
 	zylann::print_line(
-			format("VoxelNavManager3D: baked {} / {} navigation mesh(es), {} polygon(s)",
+			format("VoxelNavManager3D: baked {} / {} navigation mesh(es), {} polygon(s), {} region node(s) retained, source_mesh_total={} ms, source_geometry_total={} ms, nav_server_total={} ms, region_bake_total={} ms, region_bake_max={} ms, wall={} ms",
 				   baked_count,
+				   initial_region_count,
+				   polygon_count,
 				   _regions.size(),
-				   polygon_count)
+				   bake_source_mesh_total_time_msec,
+				   bake_source_geometry_total_time_msec,
+				   bake_navigation_server_total_time_msec,
+				   bake_region_total_time_msec,
+				   bake_region_max_time_msec,
+				   get_ticks_msec() - bake_time_before)
 	);
 }
 
@@ -185,6 +839,33 @@ void VoxelNavManager3D::clear_navigation_meshes() {
 }
 
 void VoxelNavManager3D::clear_regions() {
+	++_region_rebuild_id;
+	_region_rebuild_in_progress = false;
+	_bake_requested_after_region_rebuild = false;
+	_pending_region_probe_task_count = 0;
+	_region_probe_task_count = 0;
+	_region_probe_checked_count = 0;
+	_region_probe_skipped_empty_count = 0;
+	_region_probe_failed_create_count = 0;
+	_region_probe_generate_time_msec = 0;
+	_region_probe_scan_time_msec = 0;
+	_region_probe_apply_time_msec = 0;
+	_region_probe_max_task_time_msec = 0;
+	_region_probe_slow_task_count = 0;
+	++_nav_source_generation_id;
+	_nav_source_generation_in_progress = false;
+	_pending_nav_source_task_count = 0;
+	_nav_source_task_count = 0;
+	_nav_source_empty_count = 0;
+	_nav_source_meshed_block_count = 0;
+	_nav_source_empty_block_count = 0;
+	_nav_source_worker_time_msec = 0;
+	_nav_source_apply_time_msec = 0;
+	_nav_source_max_task_time_msec = 0;
+	clear_regions_internal();
+}
+
+void VoxelNavManager3D::clear_regions_internal() {
 	for (VoxelNavRegion3D *region : _regions) {
 		if (region == nullptr) {
 			continue;
@@ -267,6 +948,8 @@ void VoxelNavManager3D::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_region_size_power", "power"), &Self::set_region_size_power);
 	ClassDB::bind_method(D_METHOD("get_region_size_power"), &Self::get_region_size_power);
+	ClassDB::bind_method(D_METHOD("set_fine_occupancy_enabled", "enabled"), &Self::set_fine_occupancy_enabled);
+	ClassDB::bind_method(D_METHOD("is_fine_occupancy_enabled"), &Self::is_fine_occupancy_enabled);
 
 	ClassDB::bind_method(D_METHOD("rebuild_regions"), &Self::rebuild_regions);
 	ClassDB::bind_method(D_METHOD("bake_navigation_meshes"), &Self::bake_navigation_meshes);
@@ -289,6 +972,11 @@ void VoxelNavManager3D::_bind_methods() {
 			PropertyInfo(Variant::INT, "region_size_power", PROPERTY_HINT_RANGE, "0,8,1"),
 			"set_region_size_power",
 			"get_region_size_power"
+	);
+	ADD_PROPERTY(
+			PropertyInfo(Variant::BOOL, "fine_occupancy_enabled"),
+			"set_fine_occupancy_enabled",
+			"is_fine_occupancy_enabled"
 	);
 }
 
