@@ -21,6 +21,8 @@
 #include "variable_lod/voxel_lod_terrain.h"
 #include "voxel_mesh_block.h"
 #include "voxel_nav_region_3d.h"
+#include <algorithm>
+#include <functional>
 
 namespace zylann::voxel {
 
@@ -34,9 +36,245 @@ constexpr int FINE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS = 5;
 constexpr int NAV_SOURCE_BORDER_BLOCKS = 1;
 constexpr uint64_t SLOW_OCCUPANCY_TASK_LOG_THRESHOLD_MSEC = 100;
 constexpr const char *GENERATED_REGION_META_NAME = "voxel_nav_manager_generated";
+constexpr float NAV_STITCH_VERTEX_EPSILON = 0.01f;
+constexpr float NAV_STITCH_EDGE_EPSILON = 0.05f;
+constexpr float NAV_STITCH_FACTOR_EPSILON = 0.0001f;
 
 inline uint64_t get_ticks_msec() {
 	return Time::get_singleton()->get_ticks_msec();
+}
+
+inline float get_axis(const Vector3 &v, const int axis) {
+	return v[axis];
+}
+
+inline void set_axis(Vector3 &v, const int axis, const float value) {
+	v[axis] = value;
+}
+
+bool is_same_point(const Vector3 &a, const Vector3 &b) {
+	return a.distance_squared_to(b) <= NAV_STITCH_VERTEX_EPSILON * NAV_STITCH_VERTEX_EPSILON;
+}
+
+bool is_on_plane(const Vector3 &v, const int axis, const float coord) {
+	return Math::abs(get_axis(v, axis) - coord) <= NAV_STITCH_EDGE_EPSILON;
+}
+
+bool get_segment_factor(const Vector3 &a, const Vector3 &b, const Vector3 &p, float &out_t) {
+	const Vector3 ab = b - a;
+	const float len2 = ab.length_squared();
+	if (len2 <= NAV_STITCH_VERTEX_EPSILON * NAV_STITCH_VERTEX_EPSILON) {
+		return false;
+	}
+
+	const float t = ab.dot(p - a) / len2;
+	if (t <= NAV_STITCH_FACTOR_EPSILON || t >= 1.f - NAV_STITCH_FACTOR_EPSILON) {
+		return false;
+	}
+
+	const Vector3 closest = a + ab * t;
+	if (closest.distance_squared_to(p) > NAV_STITCH_EDGE_EPSILON * NAV_STITCH_EDGE_EPSILON) {
+		return false;
+	}
+
+	out_t = t;
+	return true;
+}
+
+int find_or_add_vertex(PackedVector3Array &vertices, const Vector3 &position) {
+	for (int i = 0; i < vertices.size(); ++i) {
+		if (is_same_point(vertices[i], position)) {
+			return i;
+		}
+	}
+
+	const int index = vertices.size();
+	vertices.resize(index + 1);
+	vertices.ptrw()[index] = position;
+	return index;
+}
+
+struct EdgeSplitPoint {
+	float factor = 0.f;
+	Vector3 position;
+};
+
+struct BoundaryStitchMesh {
+	PackedVector3Array vertices;
+	StdVector<PackedInt32Array> polygons;
+};
+
+BoundaryStitchMesh get_stitch_mesh(Ref<NavigationMesh> navigation_mesh) {
+	BoundaryStitchMesh mesh;
+	if (navigation_mesh.is_null()) {
+		return mesh;
+	}
+
+	mesh.vertices = navigation_mesh->get_vertices();
+	const int polygon_count = navigation_mesh->get_polygon_count();
+	mesh.polygons.reserve(polygon_count);
+	for (int i = 0; i < polygon_count; ++i) {
+		mesh.polygons.push_back(navigation_mesh->get_polygon(i));
+	}
+	return mesh;
+}
+
+void apply_stitch_mesh(Ref<NavigationMesh> navigation_mesh, const BoundaryStitchMesh &mesh) {
+	ERR_FAIL_COND(navigation_mesh.is_null());
+
+	navigation_mesh->set_vertices(mesh.vertices);
+	navigation_mesh->clear_polygons();
+	for (const PackedInt32Array &polygon : mesh.polygons) {
+		navigation_mesh->add_polygon(polygon);
+	}
+}
+
+void push_unique_stitch_point(StdVector<Vector3> &points, const Vector3 &point) {
+	for (const Vector3 &existing_point : points) {
+		if (is_same_point(existing_point, point)) {
+			return;
+		}
+	}
+	points.push_back(point);
+}
+
+StdVector<Vector3> collect_neighbor_boundary_edge_vertices(
+		const BoundaryStitchMesh &neighbor_mesh,
+		const int axis,
+		const float neighbor_boundary_coord,
+		const float local_boundary_coord
+) {
+	StdVector<Vector3> points;
+	for (const PackedInt32Array &polygon : neighbor_mesh.polygons) {
+		if (polygon.size() < 2) {
+			continue;
+		}
+
+		for (int i = 0; i < polygon.size(); ++i) {
+			Vector3 a = neighbor_mesh.vertices[polygon[i]];
+			Vector3 b = neighbor_mesh.vertices[polygon[(i + 1) % polygon.size()]];
+			if (!is_on_plane(a, axis, neighbor_boundary_coord) || !is_on_plane(b, axis, neighbor_boundary_coord)) {
+				continue;
+			}
+
+			set_axis(a, axis, local_boundary_coord);
+			set_axis(b, axis, local_boundary_coord);
+			push_unique_stitch_point(points, a);
+			push_unique_stitch_point(points, b);
+		}
+	}
+	return points;
+}
+
+bool split_boundary_edges(
+		BoundaryStitchMesh &mesh,
+		const StdVector<Vector3> &split_points,
+		const int axis,
+		const float boundary_coord
+) {
+	bool changed = false;
+
+	for (PackedInt32Array &polygon : mesh.polygons) {
+		if (polygon.size() < 2) {
+			continue;
+		}
+
+		bool polygon_changed = false;
+		StdVector<int32_t> new_indices;
+		new_indices.reserve(polygon.size() + split_points.size());
+		for (int i = 0; i < polygon.size(); ++i) {
+			const int32_t index_a = polygon[i];
+			const int32_t index_b = polygon[(i + 1) % polygon.size()];
+			Vector3 a = mesh.vertices[index_a];
+			Vector3 b = mesh.vertices[index_b];
+			new_indices.push_back(index_a);
+
+			if (!is_on_plane(a, axis, boundary_coord) || !is_on_plane(b, axis, boundary_coord)) {
+				continue;
+			}
+
+			StdVector<EdgeSplitPoint> edge_split_points;
+			for (const Vector3 &split_point : split_points) {
+				Vector3 projected_split_point = split_point;
+				set_axis(projected_split_point, axis, Math::lerp(get_axis(a, axis), get_axis(b, axis), 0.5f));
+				float factor = 0.f;
+				if (get_segment_factor(a, b, projected_split_point, factor)) {
+					const Vector3 edge_split_position = a + (b - a) * factor;
+					bool found = false;
+					for (const EdgeSplitPoint &existing_split_point : edge_split_points) {
+						if (Math::abs(existing_split_point.factor - factor) <= NAV_STITCH_FACTOR_EPSILON) {
+							found = true;
+							break;
+						}
+					}
+					if (!found) {
+						edge_split_points.push_back({ factor, edge_split_position });
+					}
+				}
+			}
+
+			if (edge_split_points.size() == 0) {
+				continue;
+			}
+
+			std::sort(
+					edge_split_points.begin(),
+					edge_split_points.end(),
+					[](const EdgeSplitPoint &a, const EdgeSplitPoint &b) { return a.factor < b.factor; }
+			);
+			for (const EdgeSplitPoint &edge_split_point : edge_split_points) {
+				new_indices.push_back(find_or_add_vertex(mesh.vertices, edge_split_point.position));
+			}
+			polygon_changed = true;
+		}
+
+		if (polygon_changed) {
+			polygon.resize(new_indices.size());
+			int32_t *polygon_w = polygon.ptrw();
+			for (unsigned int i = 0; i < new_indices.size(); ++i) {
+				polygon_w[i] = new_indices[i];
+			}
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+bool stitch_navigation_mesh_pair(
+		Ref<NavigationMesh> navigation_mesh_a,
+		Ref<NavigationMesh> navigation_mesh_b,
+		const int axis,
+		const float block_size,
+		const bool b_is_positive_neighbor
+) {
+	if (navigation_mesh_a.is_null() || navigation_mesh_b.is_null()) {
+		return false;
+	}
+
+	BoundaryStitchMesh mesh_a = get_stitch_mesh(navigation_mesh_a);
+	BoundaryStitchMesh mesh_b = get_stitch_mesh(navigation_mesh_b);
+	if (mesh_a.polygons.size() == 0 || mesh_b.polygons.size() == 0) {
+		return false;
+	}
+
+	const float boundary_coord_a = b_is_positive_neighbor ? block_size : 0.f;
+	const float boundary_coord_b = b_is_positive_neighbor ? 0.f : block_size;
+	const StdVector<Vector3> points_from_b =
+			collect_neighbor_boundary_edge_vertices(mesh_b, axis, boundary_coord_b, boundary_coord_a);
+	const StdVector<Vector3> points_from_a =
+			collect_neighbor_boundary_edge_vertices(mesh_a, axis, boundary_coord_a, boundary_coord_b);
+
+	const bool changed_a = split_boundary_edges(mesh_a, points_from_b, axis, boundary_coord_a);
+	const bool changed_b = split_boundary_edges(mesh_b, points_from_a, axis, boundary_coord_b);
+
+	if (changed_a) {
+		apply_stitch_mesh(navigation_mesh_a, mesh_a);
+	}
+	if (changed_b) {
+		apply_stitch_mesh(navigation_mesh_b, mesh_b);
+	}
+	return changed_a || changed_b;
 }
 
 unsigned int get_navigation_occupancy_probe_lod(int span_size_voxels, bool fine_occupancy) {
@@ -875,6 +1113,7 @@ void VoxelNavManager3D::bake_prebuilt_navigation_meshes(Span<VoxelNavRegion3D *>
 		_regions.swap(kept_regions);
 		zylann::print_line(format("VoxelNavManager3D: removed {} empty navigation region candidate(s)", removed_empty_region_count));
 	}
+	stitch_baked_region_edges(regions);
 	zylann::print_line(
 			format("VoxelNavManager3D: baked {} / {} navigation mesh(es), {} polygon(s), {} region node(s) retained, source_mesh_total={} ms, source_geometry_total={} ms, nav_server_total={} ms, region_bake_total={} ms, region_bake_max={} ms, wall={} ms",
 				   baked_count,
@@ -889,6 +1128,73 @@ void VoxelNavManager3D::bake_prebuilt_navigation_meshes(Span<VoxelNavRegion3D *>
 				   get_ticks_msec() - bake_time_before)
 	);
 	_pending_bake_regions.clear();
+}
+
+void VoxelNavManager3D::stitch_baked_region_edges(Span<VoxelNavRegion3D *> regions) {
+	const int region_size_blocks = 1 << _region_size_power;
+	int stitched_pair_count = 0;
+
+	for (VoxelNavRegion3D *region : regions) {
+		if (region == nullptr || !region->is_inside_tree()) {
+			continue;
+		}
+		VoxelLodTerrain *terrain = region->get_terrain();
+		if (terrain == nullptr) {
+			continue;
+		}
+
+		const float block_size = terrain->get_mesh_block_size() * region_size_blocks;
+		const Vector3i block_position = region->get_block_position();
+		Ref<NavigationMesh> navigation_mesh = region->get_navigation_mesh();
+		if (navigation_mesh.is_null() || navigation_mesh->get_polygon_count() == 0) {
+			continue;
+		}
+
+		for (int axis = 0; axis < Vector3iUtil::AXIS_COUNT; ++axis) {
+			for (int side = -1; side <= 1; side += 2) {
+				Vector3i neighbor_block_position = block_position;
+				neighbor_block_position[axis] += side * region_size_blocks;
+				VoxelNavRegion3D *neighbor = find_region(*terrain, neighbor_block_position);
+				if (neighbor == nullptr || !neighbor->is_inside_tree()) {
+					continue;
+				}
+				bool neighbor_is_in_baked_set = false;
+				for (VoxelNavRegion3D *baked_region : regions) {
+					if (baked_region == neighbor) {
+						neighbor_is_in_baked_set = true;
+						break;
+					}
+				}
+				if (neighbor_is_in_baked_set && std::less<VoxelNavRegion3D *>()(neighbor, region)) {
+					continue;
+				}
+
+				Ref<NavigationMesh> neighbor_navigation_mesh = neighbor->get_navigation_mesh();
+				if (neighbor_navigation_mesh.is_null() || neighbor_navigation_mesh->get_polygon_count() == 0) {
+					continue;
+				}
+
+				if (stitch_navigation_mesh_pair(
+							navigation_mesh,
+							neighbor_navigation_mesh,
+							axis,
+							block_size,
+							side > 0
+					)) {
+					region->synchronize_navigation_mesh();
+					neighbor->synchronize_navigation_mesh();
+					++stitched_pair_count;
+				}
+			}
+		}
+	}
+
+	if (stitched_pair_count > 0) {
+		zylann::print_line(format(
+				"VoxelNavManager3D: stitched shared vertices across {} navigation region edge pair(s)",
+				stitched_pair_count
+		));
+	}
 }
 
 void VoxelNavManager3D::clear_regions() {

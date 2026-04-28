@@ -25,6 +25,7 @@ using namespace godot;
 namespace zylann::voxel {
 
 class VoxelLodTerrain;
+class VoxelNavManager3D;
 
 class VoxelNavRegion3D : public NavigationRegion3D {
 	GDCLASS(VoxelNavRegion3D, NavigationRegion3D)
@@ -70,6 +71,8 @@ protected:
 	void _notification(int what);
 
 private:
+	friend class VoxelNavManager3D;
+
 	static void _bind_methods();
 
 	bool update_source_from_properties();
@@ -79,6 +82,7 @@ private:
 	Ref<ArrayMesh> create_source_mesh_from_lod0_collision() const;
 	void configure_navigation_mesh_bounds(Ref<NavigationMesh> navigation_mesh) const;
 	void update_navigation_server(Ref<NavigationMesh> navigation_mesh) const;
+	void synchronize_navigation_mesh();
 
 	VoxelLodTerrain *_terrain = nullptr;
 	NodePath _terrain_path;

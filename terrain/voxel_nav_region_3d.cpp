@@ -190,8 +190,8 @@ void VoxelNavRegion3D::configure_navigation_mesh_bounds(Ref<NavigationMesh> navi
 	const float block_size = _terrain->get_mesh_block_size() * (1 << _region_size_power);
 	const float bake_border_size = get_chunk_bake_border_size(**navigation_mesh);
 	navigation_mesh->set_border_size(bake_border_size);
-	if (navigation_mesh->get_edge_max_error() > 1.f) {
-		navigation_mesh->set_edge_max_error(1.f);
+	if (navigation_mesh->get_edge_max_error() > 0.5f) {
+		navigation_mesh->set_edge_max_error(0.5f);
 	}
 	navigation_mesh->set_filter_baking_aabb(
 			AABB(
@@ -311,6 +311,14 @@ void VoxelNavRegion3D::bake_navigation_mesh_from_current_source() {
 		);
 	}
 	emit_signal("bake_finished");
+}
+
+void VoxelNavRegion3D::synchronize_navigation_mesh() {
+	Ref<NavigationMesh> navigation_mesh = get_navigation_mesh();
+	if (navigation_mesh.is_valid()) {
+		update_navigation_server(navigation_mesh);
+		update_gizmos();
+	}
 }
 
 void VoxelNavRegion3D::set_source_mesh_from_collision_arrays(

@@ -94,16 +94,21 @@ ceil(agent_radius / cell_size) * cell_size
 ```
 
 - If `cell_size <= 0`, the computed bake border size shall be `0`.
-- `NavigationMesh.edge_max_error` shall not be allowed above `1.0` for voxel nav bakes, so tile-aligned border edges remain precise enough to connect.
+- `NavigationMesh.edge_max_error` shall not be allowed above `0.5` for voxel nav bakes, so contour simplification remains moderate without producing excessive boundary vertices or bake errors.
 - A nav region's generated source mesh vertices shall be local to the nav region origin.
 - Terrain-relative grid derivation shall occur in terrain local space.
 - Voxel navigation shall assume terrain transforms are usable for stable terrain-local grid derivation.
+- After manager-driven bakes, adjacent generated regions shall be stitched by splitting shared-boundary polygon edges so both regions contain matching vertices along their shared edge.
+- Edge stitching shall only split existing boundary polygon edges to add missing shared-edge vertices.
+- Edge stitching shall not move existing navigation mesh vertices or snap whole polygon edges, because that can distort the baked mesh and create gaps.
+- Incremental terrain-change handling shall stitch rebaked regions against existing adjacent generated regions instead of rebaking an entire neighbor ring only to recover shared edge vertices.
 
 ## Region Connectivity
 
 - `VoxelNavRegion3D` shall enable Godot navigation edge connections.
 - Adjacent generated regions shall be positioned so their configured bounds touch exactly in terrain-local space.
 - Adjacent generated regions shall produce matching final navmesh edges at their shared boundary.
+- Adjacent generated regions shall share vertices along matching final navmesh boundary edges.
 - Adjacent regions shall connect without moving, rotating, toggling, or otherwise editing the nodes after baking.
 - Moving a region in the editor may force Godot to rebuild links, but that shall not be required for baked voxel navigation to be usable.
 - After `NavigationServer3D::bake_from_source_geometry_data()` mutates a region's `NavigationMesh`, `VoxelNavRegion3D` shall submit its current global transform to the region RID with `NavigationServer3D::region_set_transform()`.

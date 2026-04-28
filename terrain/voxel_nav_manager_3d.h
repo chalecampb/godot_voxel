@@ -84,6 +84,7 @@ private:
 	void schedule_navigation_source_mesh_tasks();
 	void schedule_navigation_source_mesh_tasks_for_regions(Span<const ManagedRegionKey> region_keys);
 	void bake_prebuilt_navigation_meshes(Span<VoxelNavRegion3D *> regions);
+	void stitch_baked_region_edges(Span<VoxelNavRegion3D *> regions);
 
 	Ref<VoxelNavMeshSettings> _nav_mesh_settings;
 	StdVector<VoxelNavRegion3D *> _regions;
