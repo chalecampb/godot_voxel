@@ -1564,6 +1564,12 @@ void test_voxel_graph_rune_noise() {
 	ZN_TEST_ASSERT(!math::is_nan(sd1));
 	ZN_TEST_ASSERT(!math::is_inf(sd1));
 	ZN_TEST_ASSERT(!Math::is_equal_approx(sd0, sd1));
+
+#ifdef VOXEL_ENABLE_GPU
+	VoxelGenerator::ShaderSourceData shader_source;
+	ZN_TEST_ASSERT(generator->get_shader_source(shader_source));
+	ZN_TEST_ASSERT(shader_source.glsl.find("rune_noise_2d") != -1);
+#endif
 }
 
 // There was a bug where texture indices selected using a Spots2D node were returning garbage in areas that were

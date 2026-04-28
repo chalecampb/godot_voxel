@@ -26,6 +26,175 @@ Variant create_resource_to_variant() {
 
 #ifdef VOXEL_ENABLE_GPU
 
+const char *g_rune_noise_shader = R"(
+vec2 rune_fract(vec2 v) {
+	return fract(v);
+}
+
+vec2 rune_hash(vec2 x, int seed) {
+	const vec2 k = vec2(0.3183099, 0.3678794);
+	x += vec2(float(seed) * 0.1031, float(seed) * 0.11369);
+	x = x * k + vec2(k.y, k.x);
+	const float h = fract(x.x * x.y * (x.x + x.y));
+	return vec2(-1.0) + (2.0 * rune_fract(16.0 * k * h));
+}
+
+vec3 rune_noised(vec2 p, int seed) {
+	const vec2 i = floor(p);
+	const vec2 f = rune_fract(p);
+
+	const vec2 f2 = f * f;
+	const vec2 f3 = f2 * f;
+	const vec2 u = f3 * (f * (f * 6.0 - vec2(15.0)) + vec2(10.0));
+	const vec2 du = 30.0 * f2 * (f * (f - vec2(2.0)) + vec2(1.0));
+
+	const vec2 ga = rune_hash(i + vec2(0.0, 0.0), seed);
+	const vec2 gb = rune_hash(i + vec2(1.0, 0.0), seed);
+	const vec2 gc = rune_hash(i + vec2(0.0, 1.0), seed);
+	const vec2 gd = rune_hash(i + vec2(1.0, 1.0), seed);
+
+	const float va = dot(ga, f - vec2(0.0, 0.0));
+	const float vb = dot(gb, f - vec2(1.0, 0.0));
+	const float vc = dot(gc, f - vec2(0.0, 1.0));
+	const float vd = dot(gd, f - vec2(1.0, 1.0));
+	const float k = va - vb - vc + vd;
+
+	const vec2 derivative =
+			ga + u.x * (gb - ga) + u.y * (gc - ga) + (u.x * u.y) * (ga - gb - gc + gd) +
+			du * (vec2(u.y, u.x) * k + vec2(vb, vc) - vec2(va));
+
+	return vec3(va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * k, derivative.x, derivative.y);
+}
+
+vec3 rune_gullies(vec2 p, vec2 slope, int seed) {
+	const float RUNE_PI = 3.14159265358979323846;
+	const vec2 side_dir = vec2(-slope.y, slope.x) * (2.0 * RUNE_PI);
+	const vec2 p_int = floor(p);
+	const vec2 p_frac = rune_fract(p);
+	vec3 height_and_slope = vec3(0.0);
+	float weight_sum = 0.0;
+
+	for (int i = -1; i <= 2; ++i) {
+		for (int j = -1; j <= 2; ++j) {
+			const vec2 grid_offset = vec2(float(i), float(j));
+			const vec2 grid_point = p_int + grid_offset;
+			const vec2 random_offset = rune_hash(grid_point, seed) * 0.5;
+			const vec2 vector_from_cell_point = p_frac - grid_offset - random_offset;
+			const float sqr_dist = dot(vector_from_cell_point, vector_from_cell_point);
+			const float weight = max(0.0, exp(-sqr_dist * 2.0) - 0.01111);
+			weight_sum += weight;
+
+			const float wave_input = dot(vector_from_cell_point, side_dir);
+			const float slope_scale = -sin(wave_input);
+			height_and_slope += vec3(cos(wave_input), slope_scale * side_dir.x, slope_scale * side_dir.y) * weight;
+		}
+	}
+
+	if (weight_sum == 0.0) {
+		return vec3(0.0);
+	}
+	return height_and_slope / weight_sum;
+}
+
+vec3 rune_fractal_noise(
+		vec2 p,
+		float freq,
+		int octaves,
+		float lacunarity,
+		float gain,
+		float height_amp,
+		int seed
+) {
+	vec3 n = vec3(0.0);
+	float nf = freq;
+	float na = 1.0;
+	for (int i = 0; i < octaves; ++i) {
+		n += rune_noised(p * nf, seed) * na * vec3(1.0, nf, nf);
+		na *= gain;
+		nf *= lacunarity;
+	}
+	return n * height_amp;
+}
+
+float rune_magnitude_sum(int octaves, float gain) {
+	if (octaves <= 0) {
+		return 0.0;
+	}
+	if (abs(gain - 1.0) < 0.00001) {
+		return float(octaves);
+	}
+	return (1.0 - pow(gain, float(octaves))) / (1.0 - gain);
+}
+
+vec3 rune_erosion(
+		vec2 p,
+		vec3 height_and_slope,
+		float scale,
+		float strength,
+		float slope_power,
+		float cell_scale,
+		int octaves,
+		float gain,
+		float lacunarity,
+		int seed
+) {
+	const vec3 input_height_and_slope = height_and_slope;
+	float freq = 1.0 / (scale * cell_scale);
+	strength *= scale;
+	for (int i = 0; i < octaves; ++i) {
+		const float sqr_len = height_and_slope.y * height_and_slope.y + height_and_slope.z * height_and_slope.z;
+		const float slope_factor = sqr_len > 0.0 ? pow(sqr_len, 0.5 * (slope_power - 1.0)) : 0.0;
+		const vec2 input_slope = vec2(height_and_slope.y * slope_factor, height_and_slope.z * slope_factor);
+
+		height_and_slope += rune_gullies(p * freq, input_slope * cell_scale, seed) * strength * vec3(1.0, freq, freq);
+
+		strength *= gain;
+		freq *= lacunarity;
+	}
+	return height_and_slope - input_height_and_slope;
+}
+
+vec2 rune_noise_2d(
+		vec2 p,
+		int seed,
+		float erosion_scale,
+		float erosion_strength,
+		float erosion_slope_power,
+		float erosion_cell_scale,
+		float erosion_height_offset,
+		int erosion_octaves,
+		float erosion_gain,
+		float erosion_lacunarity,
+		float height_tiles,
+		int height_octaves,
+		float height_amp,
+		float height_gain,
+		float height_lacunarity,
+		float water_height
+) {
+	vec3 n = rune_fractal_noise(p, height_tiles, height_octaves, height_lacunarity, height_gain, height_amp, seed);
+	n = n * 0.5 + vec3(0.5, 0.0, 0.0);
+
+	const float strength = erosion_strength * smoothstep(water_height - 0.1, water_height + 0.1, n.x);
+	const vec3 h = rune_erosion(
+			p,
+			n,
+			erosion_scale,
+			strength,
+			erosion_slope_power,
+			erosion_cell_scale,
+			erosion_octaves,
+			erosion_gain,
+			erosion_lacunarity,
+			seed
+	);
+	const float erosion_magnitude = erosion_scale * strength * rune_magnitude_sum(erosion_octaves, erosion_gain);
+	const float height = n.x + h.x + erosion_magnitude * erosion_height_offset;
+	const float erosion = erosion_magnitude > 0.0 ? h.x / erosion_magnitude : 0.0;
+	return vec2(height, erosion);
+}
+)";
+
 int godot_domain_warp_to_fnl(FastNoiseLite::DomainWarpFractalType gd_domain_warp_type) {
 	switch (gd_domain_warp_type) {
 		case FastNoiseLite::DOMAIN_WARP_FRACTAL_NONE:
@@ -955,6 +1124,56 @@ void register_noise_nodes(Span<NodeType> types) {
 			);
 			ctx.set_output(1, Interval(-1.f, 1.f));
 		};
+
+#ifdef VOXEL_ENABLE_GPU
+		t.shader_gen_func = [](ShaderGenContext &ctx) {
+			RuneNoiseParams params;
+			params.seed = ctx.get_param(0).operator int();
+			params.erosion_scale = ctx.get_param(1);
+			params.erosion_strength = ctx.get_param(2);
+			params.erosion_slope_power = ctx.get_param(3);
+			params.erosion_cell_scale = ctx.get_param(4);
+			params.erosion_height_offset = ctx.get_param(5);
+			params.erosion_octaves = math::clamp(ctx.get_param(6).operator int(), 0, 16);
+			params.erosion_gain = ctx.get_param(7);
+			params.erosion_lacunarity = ctx.get_param(8);
+			params.height_tiles = ctx.get_param(9);
+			params.height_octaves = math::clamp(ctx.get_param(10).operator int(), 1, 16);
+			params.height_amp = ctx.get_param(11);
+			params.height_gain = ctx.get_param(12);
+			params.height_lacunarity = ctx.get_param(13);
+			params.water_height = ctx.get_param(14);
+
+			ctx.require_lib_code("vg_rune_noise", g_rune_noise_shader);
+			ctx.add_format(
+					"vec2 rune_output = rune_noise_2d("
+					"vec2({}, {}), "
+					"{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}"
+					");\n"
+					"{} = rune_output.x;\n"
+					"{} = rune_output.y;\n",
+					ctx.get_input_name(0),
+					ctx.get_input_name(1),
+					params.seed,
+					params.erosion_scale,
+					params.erosion_strength,
+					params.erosion_slope_power,
+					params.erosion_cell_scale,
+					params.erosion_height_offset,
+					params.erosion_octaves,
+					params.erosion_gain,
+					params.erosion_lacunarity,
+					params.height_tiles,
+					params.height_octaves,
+					params.height_amp,
+					params.height_gain,
+					params.height_lacunarity,
+					params.water_height,
+					ctx.get_output_name(0),
+					ctx.get_output_name(1)
+			);
+		};
+#endif
 	}
 	{
 		struct Params {
