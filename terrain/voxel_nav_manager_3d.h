@@ -16,6 +16,7 @@ class VoxelLodTerrain;
 class VoxelNavRegion3D;
 class VoxelNavOccupancyTask;
 class VoxelNavSourceMeshTask;
+class VoxelNavBakeTask;
 
 class VoxelNavManager3D : public Node3D {
 	GDCLASS(VoxelNavManager3D, Node3D)
@@ -51,6 +52,7 @@ protected:
 private:
 	friend class VoxelNavOccupancyTask;
 	friend class VoxelNavSourceMeshTask;
+	friend class VoxelNavBakeTask;
 
 	struct ManagedRegionKey {
 		VoxelLodTerrain *terrain = nullptr;
@@ -84,6 +86,7 @@ private:
 	void schedule_navigation_source_mesh_tasks();
 	void schedule_navigation_source_mesh_tasks_for_regions(Span<const ManagedRegionKey> region_keys);
 	void bake_prebuilt_navigation_meshes(Span<VoxelNavRegion3D *> regions);
+	void finish_navigation_bake_batch();
 	void stitch_baked_region_edges(Span<VoxelNavRegion3D *> regions);
 
 	Ref<VoxelNavMeshSettings> _nav_mesh_settings;
@@ -115,6 +118,21 @@ private:
 	uint64_t _nav_source_worker_time_msec = 0;
 	uint64_t _nav_source_apply_time_msec = 0;
 	uint64_t _nav_source_max_task_time_msec = 0;
+	bool _nav_bake_in_progress = false;
+	uint32_t _nav_bake_generation_id = 0;
+	int _pending_nav_bake_task_count = 0;
+	int _nav_bake_task_count = 0;
+	int _nav_bake_baked_count = 0;
+	int _nav_bake_polygon_count = 0;
+	int _nav_bake_removed_empty_region_count = 0;
+	uint64_t _nav_bake_total_time_msec = 0;
+	uint64_t _nav_bake_max_time_msec = 0;
+	uint64_t _nav_bake_apply_total_time_msec = 0;
+	uint64_t _nav_bake_apply_max_time_msec = 0;
+	uint64_t _nav_bake_finalize_time_msec = 0;
+	uint64_t _nav_bake_cleanup_time_msec = 0;
+	uint64_t _nav_bake_stitch_time_msec = 0;
+	uint64_t _nav_bake_wall_time_before_msec = 0;
 	StdVector<VoxelLodTerrain *> _connected_terrains;
 	StdUnorderedMap<ManagedRegionKey, VoxelNavRegion3D *, ManagedRegionKeyHasher> _region_map;
 	StdVector<VoxelNavRegion3D *> _pending_bake_regions;

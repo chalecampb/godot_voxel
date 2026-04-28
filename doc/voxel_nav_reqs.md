@@ -9,8 +9,9 @@ This document describes the current `VoxelNav` implementation requirements in co
 - The system shall support smooth voxel terrains using Transvoxel/SDF meshing.
 - The system shall treat navigation input as LOD0 collision geometry, not viewer-dependent render geometry.
 - The system shall avoid creating navigation regions for terrain areas that cannot plausibly contain a surface.
-- The system shall move expensive voxel source mesh generation off the main thread where possible.
-- The system shall leave Godot `NavigationServer3D` baking on the main thread.
+- The system shall move expensive voxel source geometry generation off the main thread where possible.
+- The system shall move Godot navigation baking off the main thread when baking from prebuilt source geometry.
+- The system shall use `NavigationMeshSourceGeometryData3D` as the required intermediate representation between voxel collision triangles and Godot navigation baking.
 - The system shall explicitly synchronize baked mesh changes back to `NavigationServer3D` so runtime and editor pathfinding observe the same region connectivity.
 
 ## Scene API
@@ -95,10 +96,12 @@ ceil(agent_radius / cell_size) * cell_size
 
 - If `cell_size <= 0`, the computed bake border size shall be `0`.
 - `NavigationMesh.edge_max_error` shall not be allowed above `0.5` for voxel nav bakes, so contour simplification remains moderate without producing excessive boundary vertices or bake errors.
-- A nav region's generated source mesh vertices shall be local to the nav region origin.
+- `NavigationMesh.edge_max_length` shall be capped for voxel nav bakes so Recast does not produce region-spanning polygon edges.
+- A nav region's generated source geometry vertices shall be local to the nav region origin.
 - Terrain-relative grid derivation shall occur in terrain local space.
 - Voxel navigation shall assume terrain transforms are usable for stable terrain-local grid derivation.
-- After manager-driven bakes, adjacent generated regions shall be stitched by splitting shared-boundary polygon edges so both regions contain matching vertices along their shared edge.
+- After manager-driven bakes, adjacent generated regions shall be stitched on X/Z boundaries by splitting shared-boundary polygon edges so both regions contain matching vertices along their shared edge.
+- Vertical Y-neighbor regions shall not be edge-stitched, because voxel nav regions are clipped for horizontal region bounds and vertical stitching can create dense duplicate edge occupancy in Godot's navigation map synchronization.
 - Edge stitching shall only split existing boundary polygon edges to add missing shared-edge vertices.
 - Edge stitching shall not move existing navigation mesh vertices or snap whole polygon edges, because that can distort the baked mesh and create gaps.
 - Incremental terrain-change handling shall stitch rebaked regions against existing adjacent generated regions instead of rebaking an entire neighbor ring only to recover shared edge vertices.
@@ -144,7 +147,7 @@ ceil(agent_radius / cell_size) * cell_size
 - On a terrain-change signal, `VoxelNavManager3D` shall compute the nav regions whose source geometry may include the edited voxels.
 - The affected-region calculation shall expand the edited LOD0 voxel area by the nav source border before converting to nav region coordinates.
 - Incremental terrain-change handling shall not clear or rebuild every generated region.
-- Incremental terrain-change handling shall schedule source mesh generation only for affected region coordinates.
+- Incremental terrain-change handling shall schedule source geometry generation only for affected region coordinates.
 - If an affected region already exists, the manager shall regenerate source geometry and rebake only that region.
 - If an affected region does not exist but source generation finds collision geometry, the manager shall create a new generated `VoxelNavRegion3D` for that region and bake it.
 - If source generation finds no collision geometry for an affected existing region, the manager shall clear and remove that generated region.
@@ -168,10 +171,10 @@ ceil(agent_radius / cell_size) * cell_size
 - Nav source generation shall fall back to the terrain generator for missing voxel boxes.
 - Nav source generation shall operate per LOD0 mesh block, not by generating one monolithic dense buffer for the whole nav region.
 - Nav source generation shall include neighboring LOD0 mesh blocks around a region when needed for exact edge baking.
-- Nav source generation shall append per-block collision triangles into one source mesh per `VoxelNavRegion3D`.
+- Nav source generation shall append per-block collision triangles into one `NavigationMeshSourceGeometryData3D` per `VoxelNavRegion3D`.
 - Appended per-block vertices shall be offset into nav-region-local coordinates.
 - Nav source generation shall run in worker tasks before Godot navigation baking begins.
-- Nav source task results shall assign source meshes to `VoxelNavRegion3D` only from `apply_result()` on the main thread.
+- Nav source task results shall assign source geometry data to `VoxelNavRegion3D` only from `apply_result()` on the main thread.
 - Stale nav source task results shall be ignored using a source-generation id.
 
 ## Baking
@@ -179,10 +182,12 @@ ceil(agent_radius / cell_size) * cell_size
 - `VoxelNavRegion3D::bake_navigation_mesh()` shall support standalone/manual baking.
 - `VoxelNavManager3D::bake_navigation_meshes()` shall delay if occupancy discovery is still running.
 - `VoxelNavManager3D::bake_navigation_meshes()` shall schedule threaded nav source generation before baking.
-- Godot navigation baking shall run only after source mesh generation has completed.
-- `VoxelNavRegion3D` shall bake from its current prebuilt source mesh when driven by `VoxelNavManager3D`.
+- Godot navigation baking shall run only after `NavigationMeshSourceGeometryData3D` source generation has completed.
+- Manager-driven Godot navigation baking shall run in worker tasks using `NavigationServer3D::bake_from_source_geometry_data()` and prebuilt `NavigationMeshSourceGeometryData3D`.
+- Worker bake tasks shall bake into configured `NavigationMesh` resources that are not attached to live regions until the task result is applied on the main thread.
+- `VoxelNavRegion3D` shall bake from its current prebuilt source geometry data when driven by `VoxelNavManager3D`.
 - `VoxelNavRegion3D::bake_navigation_mesh()` may keep a direct fallback path for standalone/manual region baking.
-- Regions with no source mesh shall be skipped.
+- Regions with no source geometry data shall be skipped.
 - Regions producing zero navigation polygons shall be removed from the manager's retained region list.
 - Generated `NavigationMesh` resources shall use settings from `VoxelNavMeshSettings` when available.
 - Generated regions shall apply the manager's `navigation_layers`.
@@ -194,15 +199,17 @@ ceil(agent_radius / cell_size) * cell_size
 ## Threading
 
 - Worker tasks shall not add, remove, or modify scene nodes.
-- Worker tasks shall not call Godot navigation baking APIs.
+- Worker tasks shall not parse the SceneTree for navigation source geometry.
+- Worker tasks may call `NavigationServer3D::bake_from_source_geometry_data()` only with prebuilt `NavigationMeshSourceGeometryData3D` that does not require SceneTree access.
 - Worker tasks may query thread-safe voxel generators.
 - Worker tasks may build voxel mesher output.
 - Main-thread `apply_result()` shall be responsible for:
   - creating `VoxelNavRegion3D` nodes;
-  - assigning generated source meshes;
-  - starting the final navigation bake phase.
+  - assigning generated source geometry data;
+  - assigning baked `NavigationMesh` resources to regions;
+  - synchronizing baked meshes to `NavigationServer3D`.
 - Manager rebuilds, clears, and new bake requests shall invalidate stale worker results.
-- The system shall log broad timing summaries for occupancy, source mesh generation, and navigation baking.
+- The system shall log broad timing summaries for occupancy, source geometry generation, and navigation baking.
 
 ## Logging
 
@@ -210,7 +217,8 @@ ceil(agent_radius / cell_size) * cell_size
 - Occupancy completion shall log checked, occupied, skipped, worker time, apply time, and max task time.
 - Nav source generation scheduling shall log task count and region block size.
 - Nav source completion shall log empty regions, meshed blocks, empty blocks, worker time, apply time, and max task time.
-- Slow bake regions shall log source mesh time, source geometry time, nav server time, and total time.
+- Slow bake regions shall log source mesh time, source geometry time, worker nav server bake time, main-thread apply time, and total time.
+- Bake summaries shall report worker bake total/max, main-thread apply total/max, cleanup time, edge stitch time, finalize time, and wall time.
 - Terrain fallback source generation shall log generator, modifier, mesher, extraction, AABB, and total time.
 
 ## Class Relationships
@@ -278,11 +286,11 @@ flowchart TD
     C --> D["Schedule threaded occupancy tasks"]
     D --> E["Worker tasks sample generator-backed SDF"]
     E --> F["Main thread creates occupied VoxelNavRegion3D nodes"]
-    F --> G["Schedule threaded nav source mesh tasks"]
+    F --> G["Schedule threaded nav source geometry tasks"]
     G --> H["Worker tasks mesh LOD0 blocks using VoxelData plus generator fallback"]
-    H --> I["Main thread assigns prebuilt source meshes to regions"]
-    I --> J["Main thread bakes NavigationMesh via NavigationServer3D"]
-    J --> K["Each region submits its transform and baked mesh, then forces map update"]
+    H --> I["Main thread assigns prebuilt NavigationMeshSourceGeometryData3D to regions"]
+    I --> J["Worker tasks bake NavigationMesh via NavigationServer3D from prebuilt source geometry"]
+    J --> K["Main thread applies each baked mesh, submits its transform and mesh, then forces map update"]
     K --> L["Manager removes empty/zero-polygon regions"]
 ```
 
@@ -299,8 +307,8 @@ flowchart TD
 
 ## Known Constraints
 
-- Godot navigation baking remains a main-thread cost.
-- Source mesh `ArrayMesh` creation remains a main-thread cost.
+- SceneTree parsing for navigation source geometry remains a main-thread-only operation.
+- Direct standalone `VoxelNavRegion3D::bake_navigation_mesh()` may still pay synchronous source collection and bake costs.
 - Direct `VoxelNavRegion3D::bake_navigation_mesh()` may still use the fallback terrain region source path.
 - The manager-driven path is the intended optimized path for large grids and terrain-edit rebuilds.
 - The standalone `VoxelNavRegion3D` path is the intended ergonomic path for manually placed/local navigation areas.

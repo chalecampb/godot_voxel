@@ -4,7 +4,6 @@
 #include "../util/godot/core/packed_arrays.h"
 #include "../util/godot/classes/node.h"
 #include "../util/math/vector3i.h"
-#include "../util/godot/classes/array_mesh.h"
 #include "voxel_nav_mesh_settings.h"
 
 #if defined(ZN_GODOT)
@@ -26,6 +25,7 @@ namespace zylann::voxel {
 
 class VoxelLodTerrain;
 class VoxelNavManager3D;
+class VoxelNavBakeTask;
 
 class VoxelNavRegion3D : public NavigationRegion3D {
 	GDCLASS(VoxelNavRegion3D, NavigationRegion3D)
@@ -53,12 +53,14 @@ public:
 	void bake_navigation_mesh();
 	void bake_navigation_mesh_from_current_source();
 	void clear_navigation_mesh();
+	bool has_source_geometry() const;
 	bool has_source_mesh() const;
-	void set_source_mesh_from_collision_arrays(
+	void set_source_geometry_from_collision_arrays(
 			const PackedVector3Array &vertices,
 			const PackedInt32Array &indices,
 			uint64_t source_mesh_time_msec
 	);
+	void clear_source_geometry();
 	void clear_source_mesh();
 	uint64_t get_last_source_mesh_time_msec() const;
 	uint64_t get_last_source_geometry_time_msec() const;
@@ -72,6 +74,7 @@ protected:
 
 private:
 	friend class VoxelNavManager3D;
+	friend class VoxelNavBakeTask;
 
 	static void _bind_methods();
 
@@ -79,7 +82,10 @@ private:
 	VoxelLodTerrain *resolve_terrain() const;
 	VoxelLodTerrain *find_child_terrain(Node *node) const;
 	void update_block_position_from_transform();
-	Ref<ArrayMesh> create_source_mesh_from_lod0_collision() const;
+	Ref<NavigationMeshSourceGeometryData3D> create_source_geometry_from_lod0_collision();
+	Ref<NavigationMesh> create_configured_navigation_mesh() const;
+	void apply_baked_navigation_mesh(Ref<NavigationMesh> navigation_mesh);
+	void set_last_navigation_bake_time_msec(uint64_t time_msec);
 	void configure_navigation_mesh_bounds(Ref<NavigationMesh> navigation_mesh) const;
 	void update_navigation_server(Ref<NavigationMesh> navigation_mesh) const;
 	void synchronize_navigation_mesh();
@@ -89,7 +95,7 @@ private:
 	Vector3i _block_position;
 	int _region_size_power = 0;
 	Ref<VoxelNavMeshSettings> _settings;
-	Ref<ArrayMesh> _source_mesh;
+	Ref<NavigationMeshSourceGeometryData3D> _source_geometry_data;
 	uint64_t _last_source_mesh_time_msec = 0;
 	uint64_t _last_source_geometry_time_msec = 0;
 	uint64_t _last_navigation_bake_time_msec = 0;

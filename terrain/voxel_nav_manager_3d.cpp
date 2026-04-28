@@ -35,6 +35,7 @@ constexpr int COARSE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS = 9;
 constexpr int FINE_OCCUPANCY_TARGET_SAMPLES_PER_AXIS = 5;
 constexpr int NAV_SOURCE_BORDER_BLOCKS = 1;
 constexpr uint64_t SLOW_OCCUPANCY_TASK_LOG_THRESHOLD_MSEC = 100;
+constexpr uint64_t SLOW_NAV_BAKE_MAIN_THREAD_STEP_LOG_THRESHOLD_MSEC = 16;
 constexpr const char *GENERATED_REGION_META_NAME = "voxel_nav_manager_generated";
 constexpr float NAV_STITCH_VERTEX_EPSILON = 0.01f;
 constexpr float NAV_STITCH_EDGE_EPSILON = 0.05f;
@@ -671,7 +672,7 @@ public:
 			if (region_ptr == nullptr) {
 				++manager_ptr->_nav_source_empty_count;
 			} else {
-				region_ptr->set_source_mesh_from_collision_arrays(vertices, indices, worker_time_msec);
+				region_ptr->set_source_geometry_from_collision_arrays(vertices, indices, worker_time_msec);
 			}
 		}
 		if (region_ptr != nullptr) {
@@ -698,6 +699,89 @@ public:
 
 	const char *get_debug_name() const override {
 		return "VoxelNavSourceMesh";
+	}
+};
+
+class VoxelNavBakeTask : public IThreadedTask {
+public:
+	zylann::godot::ObjectWeakRef<VoxelNavManager3D> manager;
+	zylann::godot::ObjectWeakRef<VoxelNavRegion3D> region;
+	Ref<NavigationMesh> navigation_mesh;
+	Ref<NavigationMeshSourceGeometryData3D> source_geometry_data;
+	uint32_t bake_generation_id = 0;
+	uint64_t bake_time_msec = 0;
+
+	void run(ThreadedTaskContext &ctx) override {
+		ZN_ASSERT_RETURN(navigation_mesh.is_valid());
+		ZN_ASSERT_RETURN(source_geometry_data.is_valid());
+
+		const uint64_t time_before = get_ticks_msec();
+		NavigationServer3D::get_singleton()->bake_from_source_geometry_data(navigation_mesh, source_geometry_data);
+		bake_time_msec = get_ticks_msec() - time_before;
+	}
+
+	void apply_result() override {
+		VoxelNavManager3D *manager_ptr = manager.get();
+		if (manager_ptr == nullptr) {
+			return;
+		}
+		if (manager_ptr->_nav_bake_generation_id != bake_generation_id || !manager_ptr->_nav_bake_in_progress) {
+			return;
+		}
+
+		VoxelNavRegion3D *region_ptr = region.get();
+		if (region_ptr != nullptr && region_ptr->is_inside_tree()) {
+			region_ptr->set_last_navigation_bake_time_msec(bake_time_msec);
+			const uint64_t apply_time_before = get_ticks_msec();
+			region_ptr->apply_baked_navigation_mesh(navigation_mesh);
+			const uint64_t apply_time_msec = get_ticks_msec() - apply_time_before;
+			manager_ptr->_nav_bake_apply_total_time_msec += apply_time_msec;
+			manager_ptr->_nav_bake_apply_max_time_msec =
+					math::max(manager_ptr->_nav_bake_apply_max_time_msec, apply_time_msec);
+
+			const int polygon_count = navigation_mesh->get_polygon_count();
+			if (polygon_count > 0) {
+				++manager_ptr->_nav_bake_baked_count;
+				manager_ptr->_nav_bake_polygon_count += polygon_count;
+			}
+			manager_ptr->_nav_bake_total_time_msec += bake_time_msec;
+			manager_ptr->_nav_bake_max_time_msec = math::max(manager_ptr->_nav_bake_max_time_msec, bake_time_msec);
+			if (apply_time_msec >= SLOW_NAV_BAKE_MAIN_THREAD_STEP_LOG_THRESHOLD_MSEC) {
+				const Vector3i block_position = region_ptr->get_block_position();
+				zylann::print_line(format(
+						"VoxelNavManager3D: slow bake apply region block=({}, {}, {}) polygons={} apply={} ms nav_server_worker={} ms",
+						block_position.x,
+						block_position.y,
+						block_position.z,
+						polygon_count,
+						apply_time_msec,
+						bake_time_msec
+				));
+			}
+			if (bake_time_msec >= 500) {
+				const Vector3i block_position = region_ptr->get_block_position();
+				zylann::print_line(format(
+						"VoxelNavManager3D: slow async bake region block=({}, {}, {}) polygons={} source_mesh={} ms source_geometry={} ms nav_server={} ms total={} ms",
+						block_position.x,
+						block_position.y,
+						block_position.z,
+						polygon_count,
+						region_ptr->get_last_source_mesh_time_msec(),
+						region_ptr->get_last_source_geometry_time_msec(),
+						region_ptr->get_last_navigation_bake_time_msec(),
+						bake_time_msec
+				));
+			}
+		}
+
+		--manager_ptr->_pending_nav_bake_task_count;
+		if (manager_ptr->_pending_nav_bake_task_count == 0) {
+			manager_ptr->finish_navigation_bake_batch();
+		}
+	}
+
+	const char *get_debug_name() const override {
+		return "VoxelNavBake";
 	}
 };
 
@@ -802,6 +886,21 @@ void VoxelNavManager3D::rebuild_regions() {
 	_nav_source_worker_time_msec = 0;
 	_nav_source_apply_time_msec = 0;
 	_nav_source_max_task_time_msec = 0;
+	++_nav_bake_generation_id;
+	_nav_bake_in_progress = false;
+	_pending_nav_bake_task_count = 0;
+	_nav_bake_task_count = 0;
+	_nav_bake_baked_count = 0;
+	_nav_bake_polygon_count = 0;
+	_nav_bake_removed_empty_region_count = 0;
+	_nav_bake_total_time_msec = 0;
+	_nav_bake_max_time_msec = 0;
+	_nav_bake_apply_total_time_msec = 0;
+	_nav_bake_apply_max_time_msec = 0;
+	_nav_bake_finalize_time_msec = 0;
+	_nav_bake_cleanup_time_msec = 0;
+	_nav_bake_stitch_time_msec = 0;
+	_nav_bake_wall_time_before_msec = 0;
 	_pending_bake_regions.clear();
 
 	clear_regions_internal();
@@ -911,6 +1010,10 @@ void VoxelNavManager3D::bake_navigation_meshes() {
 		zylann::print_line("VoxelNavManager3D: nav source mesh generation is already in progress");
 		return;
 	}
+	if (_nav_bake_in_progress) {
+		zylann::print_line("VoxelNavManager3D: navigation baking is already in progress");
+		return;
+	}
 
 	if (_region_rebuild_in_progress) {
 		_bake_requested_after_region_rebuild = true;
@@ -949,6 +1052,8 @@ void VoxelNavManager3D::schedule_navigation_source_mesh_tasks() {
 void VoxelNavManager3D::schedule_navigation_source_mesh_tasks_for_regions(Span<const ManagedRegionKey> region_keys) {
 	++_nav_source_generation_id;
 	_nav_source_generation_in_progress = false;
+	++_nav_bake_generation_id;
+	_nav_bake_in_progress = false;
 	_pending_nav_source_task_count = 0;
 	_nav_source_task_count = 0;
 	_nav_source_empty_count = 0;
@@ -957,6 +1062,19 @@ void VoxelNavManager3D::schedule_navigation_source_mesh_tasks_for_regions(Span<c
 	_nav_source_worker_time_msec = 0;
 	_nav_source_apply_time_msec = 0;
 	_nav_source_max_task_time_msec = 0;
+	_pending_nav_bake_task_count = 0;
+	_nav_bake_task_count = 0;
+	_nav_bake_baked_count = 0;
+	_nav_bake_polygon_count = 0;
+	_nav_bake_removed_empty_region_count = 0;
+	_nav_bake_total_time_msec = 0;
+	_nav_bake_max_time_msec = 0;
+	_nav_bake_apply_total_time_msec = 0;
+	_nav_bake_apply_max_time_msec = 0;
+	_nav_bake_finalize_time_msec = 0;
+	_nav_bake_cleanup_time_msec = 0;
+	_nav_bake_stitch_time_msec = 0;
+	_nav_bake_wall_time_before_msec = 0;
 	_pending_bake_regions.clear();
 
 	StdVector<IThreadedTask *> tasks;
@@ -973,7 +1091,7 @@ void VoxelNavManager3D::schedule_navigation_source_mesh_tasks_for_regions(Span<c
 			if (!region->is_inside_tree()) {
 				continue;
 			}
-			region->clear_source_mesh();
+			region->clear_source_geometry();
 		}
 		Ref<VoxelMesher> mesher = terrain->get_mesher();
 		if (mesher.is_null()) {
@@ -1025,29 +1143,35 @@ void VoxelNavManager3D::schedule_navigation_source_mesh_tasks_for_regions(Span<c
 }
 
 void VoxelNavManager3D::bake_prebuilt_navigation_meshes(Span<VoxelNavRegion3D *> regions) {
-	if (_nav_source_generation_in_progress) {
+	if (_nav_source_generation_in_progress || _nav_bake_in_progress) {
 		return;
 	}
 
-	zylann::print_line(format("VoxelNavManager3D: baking {} navigation region(s)", regions.size()));
-	const uint64_t bake_time_before = get_ticks_msec();
-	const unsigned int initial_region_count = regions.size();
-	int baked_count = 0;
-	int polygon_count = 0;
-	int removed_empty_region_count = 0;
-	uint64_t bake_region_total_time_msec = 0;
-	uint64_t bake_region_max_time_msec = 0;
-	uint64_t bake_source_mesh_total_time_msec = 0;
-	uint64_t bake_source_geometry_total_time_msec = 0;
-	uint64_t bake_navigation_server_total_time_msec = 0;
+	++_nav_bake_generation_id;
+	_pending_nav_bake_task_count = 0;
+	_nav_bake_task_count = 0;
+	_nav_bake_baked_count = 0;
+	_nav_bake_polygon_count = 0;
+	_nav_bake_removed_empty_region_count = 0;
+	_nav_bake_total_time_msec = 0;
+	_nav_bake_max_time_msec = 0;
+	_nav_bake_apply_total_time_msec = 0;
+	_nav_bake_apply_max_time_msec = 0;
+	_nav_bake_finalize_time_msec = 0;
+	_nav_bake_cleanup_time_msec = 0;
+	_nav_bake_stitch_time_msec = 0;
+	_nav_bake_wall_time_before_msec = get_ticks_msec();
+
+	zylann::print_line(format("VoxelNavManager3D: scheduling async bake for {} navigation region(s)", regions.size()));
+	StdVector<IThreadedTask *> tasks;
+	const uint32_t bake_generation_id = _nav_bake_generation_id;
 	for (unsigned int region_index = 0; region_index < regions.size(); ++region_index) {
 		VoxelNavRegion3D *region = regions[region_index];
 		if (region != nullptr && region->is_inside_tree()) {
-			const uint64_t region_bake_time_before = get_ticks_msec();
 			if (region_index == 0 || (region_index % 16) == 0) {
 				const Vector3i block_position = region->get_block_position();
 				zylann::print_line(
-						format("VoxelNavManager3D: baking region {} / {} at block ({}, {}, {})",
+						format("VoxelNavManager3D: scheduling bake region {} / {} at block ({}, {}, {})",
 							   region_index + 1,
 							   regions.size(),
 							   block_position.x,
@@ -1055,77 +1179,113 @@ void VoxelNavManager3D::bake_prebuilt_navigation_meshes(Span<VoxelNavRegion3D *>
 							   block_position.z)
 				);
 			}
-			region->bake_navigation_mesh_from_current_source();
-			Ref<NavigationMesh> navigation_mesh = region->get_navigation_mesh();
-			int region_polygon_count = 0;
-			if (navigation_mesh.is_valid()) {
-				region_polygon_count = navigation_mesh->get_polygon_count();
-				if (region_polygon_count > 0) {
-					++baked_count;
-					polygon_count += region_polygon_count;
-				}
+
+			if (!region->has_source_geometry()) {
+				continue;
 			}
-			const uint64_t region_bake_time = get_ticks_msec() - region_bake_time_before;
-			bake_region_total_time_msec += region_bake_time;
-			bake_region_max_time_msec = math::max(bake_region_max_time_msec, region_bake_time);
-			bake_source_mesh_total_time_msec += region->get_last_source_mesh_time_msec();
-			bake_source_geometry_total_time_msec += region->get_last_source_geometry_time_msec();
-			bake_navigation_server_total_time_msec += region->get_last_navigation_bake_time_msec();
-			if (region_bake_time >= 500) {
-				const Vector3i block_position = region->get_block_position();
-				zylann::print_line(format(
-						"VoxelNavManager3D: slow bake region block=({}, {}, {}) polygons={} source_mesh={} ms source_geometry={} ms nav_server={} ms total={} ms",
-						block_position.x,
-						block_position.y,
-						block_position.z,
-						region_polygon_count,
-						region->get_last_source_mesh_time_msec(),
-						region->get_last_source_geometry_time_msec(),
-						region->get_last_navigation_bake_time_msec(),
-						region_bake_time
-				));
-			}
-			if (!region->has_source_mesh() || region_polygon_count == 0) {
-				unregister_region(*region);
-				for (VoxelNavRegion3D *&stored_region : _regions) {
-					if (stored_region == region) {
-						stored_region = nullptr;
-						break;
-					}
-				}
-				if (region->get_parent() == this) {
-					remove_child(region);
-				}
-				memdelete(region);
-				regions[region_index] = nullptr;
-				++removed_empty_region_count;
-			}
+			VoxelNavBakeTask *task = ZN_NEW(VoxelNavBakeTask);
+			task->manager.set(this);
+			task->region.set(region);
+			task->navigation_mesh = region->create_configured_navigation_mesh();
+			task->source_geometry_data = region->_source_geometry_data;
+			task->bake_generation_id = bake_generation_id;
+			tasks.push_back(task);
 		}
 	}
-	if (removed_empty_region_count > 0) {
+
+	if (tasks.size() == 0) {
+		finish_navigation_bake_batch();
+		return;
+	}
+
+	_nav_bake_in_progress = true;
+	_pending_nav_bake_task_count = tasks.size();
+	_nav_bake_task_count = tasks.size();
+	VoxelEngine::get_singleton().push_async_tasks(to_span(tasks));
+}
+
+void VoxelNavManager3D::finish_navigation_bake_batch() {
+	if (!_nav_bake_in_progress && _nav_bake_task_count > 0) {
+		return;
+	}
+	const uint64_t finalize_time_before = get_ticks_msec();
+	_nav_bake_in_progress = false;
+
+	uint64_t bake_source_mesh_total_time_msec = 0;
+	uint64_t bake_source_geometry_total_time_msec = 0;
+	uint64_t bake_navigation_server_total_time_msec = 0;
+	const uint64_t cleanup_time_before = get_ticks_msec();
+	for (unsigned int region_index = 0; region_index < _pending_bake_regions.size(); ++region_index) {
+		VoxelNavRegion3D *region = _pending_bake_regions[region_index];
+		if (region == nullptr || !region->is_inside_tree()) {
+			continue;
+		}
+
+		bake_source_mesh_total_time_msec += region->get_last_source_mesh_time_msec();
+		bake_source_geometry_total_time_msec += region->get_last_source_geometry_time_msec();
+		bake_navigation_server_total_time_msec += region->get_last_navigation_bake_time_msec();
+
+		Ref<NavigationMesh> navigation_mesh = region->get_navigation_mesh();
+		if (!region->has_source_geometry() || navigation_mesh.is_null() || navigation_mesh->get_polygon_count() == 0) {
+			unregister_region(*region);
+			for (VoxelNavRegion3D *&stored_region : _regions) {
+				if (stored_region == region) {
+					stored_region = nullptr;
+					break;
+				}
+			}
+			if (region->get_parent() == this) {
+				remove_child(region);
+			}
+			memdelete(region);
+			_pending_bake_regions[region_index] = nullptr;
+			++_nav_bake_removed_empty_region_count;
+		}
+	}
+	_nav_bake_cleanup_time_msec = get_ticks_msec() - cleanup_time_before;
+	if (_nav_bake_removed_empty_region_count > 0) {
 		StdVector<VoxelNavRegion3D *> kept_regions;
-		kept_regions.reserve(_regions.size() - removed_empty_region_count);
+		kept_regions.reserve(_regions.size() - _nav_bake_removed_empty_region_count);
 		for (VoxelNavRegion3D *region : _regions) {
 			if (region != nullptr) {
 				kept_regions.push_back(region);
 			}
 		}
 		_regions.swap(kept_regions);
-		zylann::print_line(format("VoxelNavManager3D: removed {} empty navigation region candidate(s)", removed_empty_region_count));
+		zylann::print_line(format(
+				"VoxelNavManager3D: removed {} empty navigation region candidate(s)",
+				_nav_bake_removed_empty_region_count
+		));
 	}
-	stitch_baked_region_edges(regions);
+	const uint64_t stitch_time_before = get_ticks_msec();
+	stitch_baked_region_edges(to_span(_pending_bake_regions));
+	_nav_bake_stitch_time_msec = get_ticks_msec() - stitch_time_before;
+	_nav_bake_finalize_time_msec = get_ticks_msec() - finalize_time_before;
+	if (_nav_bake_finalize_time_msec >= SLOW_NAV_BAKE_MAIN_THREAD_STEP_LOG_THRESHOLD_MSEC) {
+		zylann::print_line(format(
+				"VoxelNavManager3D: slow bake finalize cleanup={} ms stitch={} ms finalize={} ms",
+				_nav_bake_cleanup_time_msec,
+				_nav_bake_stitch_time_msec,
+				_nav_bake_finalize_time_msec
+		));
+	}
 	zylann::print_line(
-			format("VoxelNavManager3D: baked {} / {} navigation mesh(es), {} polygon(s), {} region node(s) retained, source_mesh_total={} ms, source_geometry_total={} ms, nav_server_total={} ms, region_bake_total={} ms, region_bake_max={} ms, wall={} ms",
-				   baked_count,
-				   initial_region_count,
-				   polygon_count,
+			format("VoxelNavManager3D: baked {} / {} navigation mesh(es), {} polygon(s), {} region node(s) retained, source_mesh_total={} ms, source_geometry_total={} ms, nav_server_total={} ms, region_bake_total={} ms, region_bake_max={} ms, apply_total={} ms, apply_max={} ms, cleanup={} ms, stitch={} ms, finalize={} ms, wall={} ms",
+				   _nav_bake_baked_count,
+				   _pending_bake_regions.size(),
+				   _nav_bake_polygon_count,
 				   _regions.size(),
 				   bake_source_mesh_total_time_msec,
 				   bake_source_geometry_total_time_msec,
 				   bake_navigation_server_total_time_msec,
-				   bake_region_total_time_msec,
-				   bake_region_max_time_msec,
-				   get_ticks_msec() - bake_time_before)
+				   _nav_bake_total_time_msec,
+				   _nav_bake_max_time_msec,
+				   _nav_bake_apply_total_time_msec,
+				   _nav_bake_apply_max_time_msec,
+				   _nav_bake_cleanup_time_msec,
+				   _nav_bake_stitch_time_msec,
+				   _nav_bake_finalize_time_msec,
+				   get_ticks_msec() - _nav_bake_wall_time_before_msec)
 	);
 	_pending_bake_regions.clear();
 }
@@ -1151,6 +1311,9 @@ void VoxelNavManager3D::stitch_baked_region_edges(Span<VoxelNavRegion3D *> regio
 		}
 
 		for (int axis = 0; axis < Vector3iUtil::AXIS_COUNT; ++axis) {
+			if (axis == Vector3::AXIS_Y) {
+				continue;
+			}
 			for (int side = -1; side <= 1; side += 2) {
 				Vector3i neighbor_block_position = block_position;
 				neighbor_block_position[axis] += side * region_size_blocks;
@@ -1221,6 +1384,21 @@ void VoxelNavManager3D::clear_regions() {
 	_nav_source_worker_time_msec = 0;
 	_nav_source_apply_time_msec = 0;
 	_nav_source_max_task_time_msec = 0;
+	++_nav_bake_generation_id;
+	_nav_bake_in_progress = false;
+	_pending_nav_bake_task_count = 0;
+	_nav_bake_task_count = 0;
+	_nav_bake_baked_count = 0;
+	_nav_bake_polygon_count = 0;
+	_nav_bake_removed_empty_region_count = 0;
+	_nav_bake_total_time_msec = 0;
+	_nav_bake_max_time_msec = 0;
+	_nav_bake_apply_total_time_msec = 0;
+	_nav_bake_apply_max_time_msec = 0;
+	_nav_bake_finalize_time_msec = 0;
+	_nav_bake_cleanup_time_msec = 0;
+	_nav_bake_stitch_time_msec = 0;
+	_nav_bake_wall_time_before_msec = 0;
 	_pending_bake_regions.clear();
 	clear_regions_internal();
 }

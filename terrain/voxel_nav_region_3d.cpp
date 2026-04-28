@@ -132,7 +132,7 @@ void VoxelNavRegion3D::update_block_position_from_transform() {
 }
 
 bool VoxelNavRegion3D::update_source_from_properties() {
-	_source_mesh = Ref<ArrayMesh>();
+	_source_geometry_data = Ref<NavigationMeshSourceGeometryData3D>();
 	_terrain = resolve_terrain();
 	if (_terrain == nullptr) {
 		return false;
@@ -152,8 +152,8 @@ bool VoxelNavRegion3D::update_source_from_properties() {
 	return true;
 }
 
-Ref<ArrayMesh> VoxelNavRegion3D::create_source_mesh_from_lod0_collision() const {
-	ERR_FAIL_COND_V(_terrain == nullptr, Ref<ArrayMesh>());
+Ref<NavigationMeshSourceGeometryData3D> VoxelNavRegion3D::create_source_geometry_from_lod0_collision() {
+	ERR_FAIL_COND_V(_terrain == nullptr, Ref<NavigationMeshSourceGeometryData3D>());
 
 	const int region_size_blocks = 1 << _region_size_power;
 	const int source_size_blocks = region_size_blocks + 2 * NAV_SOURCE_BORDER_BLOCKS;
@@ -163,7 +163,7 @@ Ref<ArrayMesh> VoxelNavRegion3D::create_source_mesh_from_lod0_collision() const 
 	if (!_terrain->generate_lod0_collision_mesh_for_navigation_region(
 				source_block_position, source_size_blocks, vertices, indices
 	)) {
-		return Ref<ArrayMesh>();
+		return Ref<NavigationMeshSourceGeometryData3D>();
 	}
 	const Vector3 source_offset =
 			to_vec3(Vector3iUtil::create(NAV_SOURCE_BORDER_BLOCKS * _terrain->get_mesh_block_size()));
@@ -172,14 +172,8 @@ Ref<ArrayMesh> VoxelNavRegion3D::create_source_mesh_from_lod0_collision() const 
 		vertices_w[i] -= source_offset;
 	}
 
-	Ref<ArrayMesh> mesh;
-	mesh.instantiate();
-	Array arrays;
-	arrays.resize(Mesh::ARRAY_MAX);
-	arrays[Mesh::ARRAY_VERTEX] = vertices;
-	arrays[Mesh::ARRAY_INDEX] = indices;
-	mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-	return mesh;
+	set_source_geometry_from_collision_arrays(vertices, indices, 0);
+	return _source_geometry_data;
 }
 
 void VoxelNavRegion3D::configure_navigation_mesh_bounds(Ref<NavigationMesh> navigation_mesh) const {
@@ -192,6 +186,11 @@ void VoxelNavRegion3D::configure_navigation_mesh_bounds(Ref<NavigationMesh> navi
 	navigation_mesh->set_border_size(bake_border_size);
 	if (navigation_mesh->get_edge_max_error() > 0.5f) {
 		navigation_mesh->set_edge_max_error(0.5f);
+	}
+	const float max_edge_length = navigation_mesh->get_edge_max_length();
+	const float max_voxel_nav_edge_length = Math::max(navigation_mesh->get_cell_size(), block_size * 0.25f);
+	if (max_edge_length <= 0.f || max_edge_length > max_voxel_nav_edge_length) {
+		navigation_mesh->set_edge_max_length(max_voxel_nav_edge_length);
 	}
 	navigation_mesh->set_filter_baking_aabb(
 			AABB(
@@ -241,19 +240,52 @@ void VoxelNavRegion3D::update_navigation_server(Ref<NavigationMesh> navigation_m
 	}
 }
 
+Ref<NavigationMesh> VoxelNavRegion3D::create_configured_navigation_mesh() const {
+	Ref<NavigationMesh> navigation_mesh;
+	if (_settings.is_valid()) {
+		navigation_mesh = _settings->instantiate_navigation_mesh();
+	} else {
+		navigation_mesh.instantiate();
+	}
+	configure_navigation_mesh_bounds(navigation_mesh);
+	return navigation_mesh;
+}
+
+void VoxelNavRegion3D::apply_baked_navigation_mesh(Ref<NavigationMesh> navigation_mesh) {
+	if (navigation_mesh.is_null()) {
+		return;
+	}
+	set_navigation_mesh(navigation_mesh);
+	update_navigation_server(navigation_mesh);
+	update_gizmos();
+	if (navigation_mesh->get_polygon_count() == 0) {
+		zylann::print_line(
+				format("VoxelNavRegion3D: baked block ({}, {}, {}) with 0 polygons",
+					   _block_position.x,
+					   _block_position.y,
+					   _block_position.z)
+		);
+	}
+	emit_signal("bake_finished");
+}
+
+void VoxelNavRegion3D::set_last_navigation_bake_time_msec(uint64_t time_msec) {
+	_last_navigation_bake_time_msec = time_msec;
+}
+
 void VoxelNavRegion3D::bake_navigation_mesh() {
 	_last_source_mesh_time_msec = 0;
 	_last_source_geometry_time_msec = 0;
 	_last_navigation_bake_time_msec = 0;
 
-	_source_mesh = Ref<ArrayMesh>();
+	_source_geometry_data = Ref<NavigationMeshSourceGeometryData3D>();
 	_terrain = resolve_terrain();
 	update_block_position_from_transform();
 	const uint64_t source_mesh_time_before = get_ticks_msec();
-	_source_mesh = create_source_mesh_from_lod0_collision();
+	_source_geometry_data = create_source_geometry_from_lod0_collision();
 	_last_source_mesh_time_msec = get_ticks_msec() - source_mesh_time_before;
 
-	if (_source_mesh.is_null()) {
+	if (_source_geometry_data.is_null() || !_source_geometry_data->has_data()) {
 		zylann::print_line(
 				format("VoxelNavRegion3D: skipped bake for block ({}, {}, {}), no source mesh",
 					   _block_position.x,
@@ -270,7 +302,7 @@ void VoxelNavRegion3D::bake_navigation_mesh_from_current_source() {
 	_last_source_geometry_time_msec = 0;
 	_last_navigation_bake_time_msec = 0;
 
-	if (_source_mesh.is_null()) {
+	if (_source_geometry_data.is_null() || !_source_geometry_data->has_data()) {
 		zylann::print_line(
 				format("VoxelNavRegion3D: skipped bake for block ({}, {}, {}), no source mesh",
 					   _block_position.x,
@@ -280,37 +312,11 @@ void VoxelNavRegion3D::bake_navigation_mesh_from_current_source() {
 		return;
 	}
 
-	Ref<NavigationMesh> navigation_mesh = get_navigation_mesh();
-	if (navigation_mesh.is_null()) {
-		if (_settings.is_valid()) {
-			navigation_mesh = _settings->instantiate_navigation_mesh();
-		} else {
-			navigation_mesh.instantiate();
-		}
-		set_navigation_mesh(navigation_mesh);
-	}
-	configure_navigation_mesh_bounds(navigation_mesh);
-
-	const uint64_t source_geometry_time_before = get_ticks_msec();
-	Ref<NavigationMeshSourceGeometryData3D> source_geometry_data;
-	source_geometry_data.instantiate();
-	source_geometry_data->add_mesh(_source_mesh, Transform3D());
-	_last_source_geometry_time_msec = get_ticks_msec() - source_geometry_time_before;
-
+	Ref<NavigationMesh> navigation_mesh = create_configured_navigation_mesh();
 	const uint64_t navigation_bake_time_before = get_ticks_msec();
-	NavigationServer3D::get_singleton()->bake_from_source_geometry_data(navigation_mesh, source_geometry_data);
+	NavigationServer3D::get_singleton()->bake_from_source_geometry_data(navigation_mesh, _source_geometry_data);
 	_last_navigation_bake_time_msec = get_ticks_msec() - navigation_bake_time_before;
-	update_navigation_server(navigation_mesh);
-	update_gizmos();
-	if (navigation_mesh->get_polygon_count() == 0) {
-		zylann::print_line(
-				format("VoxelNavRegion3D: baked block ({}, {}, {}) with 0 polygons",
-					   _block_position.x,
-					   _block_position.y,
-					   _block_position.z)
-		);
-	}
-	emit_signal("bake_finished");
+	apply_baked_navigation_mesh(navigation_mesh);
 }
 
 void VoxelNavRegion3D::synchronize_navigation_mesh() {
@@ -321,12 +327,12 @@ void VoxelNavRegion3D::synchronize_navigation_mesh() {
 	}
 }
 
-void VoxelNavRegion3D::set_source_mesh_from_collision_arrays(
+void VoxelNavRegion3D::set_source_geometry_from_collision_arrays(
 		const PackedVector3Array &vertices,
 		const PackedInt32Array &indices,
 		uint64_t source_mesh_time_msec
 ) {
-	_source_mesh = Ref<ArrayMesh>();
+	_source_geometry_data = Ref<NavigationMeshSourceGeometryData3D>();
 	_last_source_mesh_time_msec = source_mesh_time_msec;
 	_last_source_geometry_time_msec = 0;
 	_last_navigation_bake_time_msec = 0;
@@ -336,22 +342,36 @@ void VoxelNavRegion3D::set_source_mesh_from_collision_arrays(
 	}
 
 	const uint64_t time_before = get_ticks_msec();
-	Ref<ArrayMesh> mesh;
-	mesh.instantiate();
-	Array arrays;
-	arrays.resize(Mesh::ARRAY_MAX);
-	arrays[Mesh::ARRAY_VERTEX] = vertices;
-	arrays[Mesh::ARRAY_INDEX] = indices;
-	mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-	_source_mesh = mesh;
-	_last_source_mesh_time_msec += get_ticks_msec() - time_before;
+	PackedVector3Array faces;
+	faces.resize(indices.size());
+	Vector3 *faces_w = faces.ptrw();
+	const Vector3 *vertices_r = vertices.ptr();
+	const int32_t *indices_r = indices.ptr();
+	for (int i = 0; i < indices.size(); ++i) {
+		const int32_t vertex_index = indices_r[i];
+		if (vertex_index < 0 || vertex_index >= vertices.size()) {
+			_source_geometry_data = Ref<NavigationMeshSourceGeometryData3D>();
+			return;
+		}
+		faces_w[i] = vertices_r[vertex_index];
+	}
+
+	Ref<NavigationMeshSourceGeometryData3D> source_geometry_data;
+	source_geometry_data.instantiate();
+	source_geometry_data->add_faces(faces, Transform3D());
+	_source_geometry_data = source_geometry_data;
+	_last_source_geometry_time_msec = get_ticks_msec() - time_before;
 }
 
-void VoxelNavRegion3D::clear_source_mesh() {
-	_source_mesh = Ref<ArrayMesh>();
+void VoxelNavRegion3D::clear_source_geometry() {
+	_source_geometry_data = Ref<NavigationMeshSourceGeometryData3D>();
 	_last_source_mesh_time_msec = 0;
 	_last_source_geometry_time_msec = 0;
 	_last_navigation_bake_time_msec = 0;
+}
+
+void VoxelNavRegion3D::clear_source_mesh() {
+	clear_source_geometry();
 }
 
 void VoxelNavRegion3D::clear_navigation_mesh() {
@@ -363,8 +383,12 @@ void VoxelNavRegion3D::clear_navigation_mesh() {
 	}
 }
 
+bool VoxelNavRegion3D::has_source_geometry() const {
+	return _source_geometry_data.is_valid() && _source_geometry_data->has_data();
+}
+
 bool VoxelNavRegion3D::has_source_mesh() const {
-	return _source_mesh.is_valid();
+	return has_source_geometry();
 }
 
 uint64_t VoxelNavRegion3D::get_last_source_mesh_time_msec() const {
@@ -403,6 +427,7 @@ void VoxelNavRegion3D::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("bake_navigation_mesh"), &Self::bake_navigation_mesh);
 	ClassDB::bind_method(D_METHOD("bake_navigation_mesh_from_current_source"), &Self::bake_navigation_mesh_from_current_source);
 	ClassDB::bind_method(D_METHOD("clear_navigation_mesh"), &Self::clear_navigation_mesh);
+	ClassDB::bind_method(D_METHOD("has_source_geometry"), &Self::has_source_geometry);
 	ClassDB::bind_method(D_METHOD("has_source_mesh"), &Self::has_source_mesh);
 	ClassDB::bind_method(D_METHOD("get_last_source_mesh_time_msec"), &Self::get_last_source_mesh_time_msec);
 	ClassDB::bind_method(D_METHOD("get_last_source_geometry_time_msec"), &Self::get_last_source_geometry_time_msec);
