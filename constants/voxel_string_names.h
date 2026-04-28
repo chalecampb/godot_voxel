@@ -28,6 +28,7 @@ public:
 
 	StringName mesh_block_entered;
 	StringName mesh_block_exited;
+	StringName voxel_area_edited;
 
 	StringName store_colors_in_texture;
 	StringName scale;

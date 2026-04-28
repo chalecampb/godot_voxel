@@ -618,6 +618,7 @@ void VoxelLodTerrain::post_edit_area(Box3i p_box, bool update_mesh) {
 		_data->mark_area_modified(p_box, &_update_data->state.edit_notifications.edited_blocks_lod0, update_mesh);
 		_update_data->state.edit_notifications.edited_voxel_areas_lod0.push_back(p_box);
 	}
+	emit_signal(VoxelStringNames::get_singleton().voxel_area_edited, this, p_box.position, p_box.size);
 
 #ifdef TOOLS_ENABLED
 	if (debug_is_draw_enabled() && debug_get_draw_flag(DEBUG_DRAW_EDIT_BOXES)) {
@@ -650,8 +651,11 @@ void VoxelLodTerrain::post_edit_modifiers(Box3i p_voxel_box) {
 	_data->clear_cached_blocks_in_voxel_area(p_voxel_box);
 	// Not sure if it is worth re-caching these blocks. We may see about that in the future if performance is an issue.
 
-	MutexLock lock(_update_data->state.changed_generated_areas_mutex);
-	_update_data->state.changed_generated_areas.push_back(p_voxel_box);
+	{
+		MutexLock lock(_update_data->state.changed_generated_areas_mutex);
+		_update_data->state.changed_generated_areas.push_back(p_voxel_box);
+	}
+	emit_signal(VoxelStringNames::get_singleton().voxel_area_edited, this, p_voxel_box.position, p_voxel_box.size);
 
 #ifdef TOOLS_ENABLED
 	if (debug_is_draw_enabled() && debug_get_draw_flag(DEBUG_DRAW_EDIT_BOXES)) {
@@ -4220,6 +4224,13 @@ void VoxelLodTerrain::_bind_methods() {
 
 	BIND_ENUM_CONSTANT(STREAMING_SYSTEM_LEGACY_OCTREE);
 	BIND_ENUM_CONSTANT(STREAMING_SYSTEM_CLIPBOX);
+
+	ADD_SIGNAL(MethodInfo(
+			"voxel_area_edited",
+			PropertyInfo(Variant::OBJECT, "terrain"),
+			PropertyInfo(Variant::VECTOR3I, "position"),
+			PropertyInfo(Variant::VECTOR3I, "size")
+	));
 
 	ADD_GROUP("Bounds", "");
 

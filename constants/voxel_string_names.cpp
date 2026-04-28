@@ -33,6 +33,7 @@ VoxelStringNames::VoxelStringNames() {
 
 	mesh_block_entered = StringName("mesh_block_entered");
 	mesh_block_exited = StringName("mesh_block_exited");
+	voxel_area_edited = StringName("voxel_area_edited");
 
 	store_colors_in_texture = StringName("store_colors_in_texture");
 	scale = StringName("scale");

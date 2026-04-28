@@ -2,9 +2,13 @@
 #define VOXEL_NAV_MANAGER_3D_H
 
 #include "../util/containers/std_vector.h"
+#include "../util/containers/std_unordered_map.h"
+#include "../util/containers/span.h"
+#include "../util/math/box3i.h"
 #include "voxel_nav_mesh_settings.h"
 
 #include "../util/godot/classes/node_3d.h"
+#include <functional>
 
 namespace zylann::voxel {
 
@@ -48,13 +52,38 @@ private:
 	friend class VoxelNavOccupancyTask;
 	friend class VoxelNavSourceMeshTask;
 
+	struct ManagedRegionKey {
+		VoxelLodTerrain *terrain = nullptr;
+		Vector3i block_position;
+
+		inline bool operator==(const ManagedRegionKey &other) const {
+			return terrain == other.terrain && block_position == other.block_position;
+		}
+	};
+
+	struct ManagedRegionKeyHasher {
+		size_t operator()(const ManagedRegionKey &key) const {
+			size_t hash = std::hash<VoxelLodTerrain *>()(key.terrain);
+			hash ^= std::hash<Vector3i>()(key.block_position) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+			return hash;
+		}
+	};
+
 	static void _bind_methods();
 
 	void collect_voxel_lod_terrains(Node *node, StdVector<VoxelLodTerrain *> &out_terrains) const;
 	VoxelNavRegion3D *create_region(VoxelLodTerrain &terrain, Vector3i block_position);
+	VoxelNavRegion3D *find_region(VoxelLodTerrain &terrain, Vector3i block_position) const;
+	void unregister_region(VoxelNavRegion3D &region);
 	void clear_regions_internal();
+	void refresh_terrain_connections();
+	void connect_terrain(VoxelLodTerrain &terrain);
+	void disconnect_terrains();
+	void _on_terrain_voxel_area_edited(VoxelLodTerrain *terrain, Vector3i position, Vector3i size);
+	void update_regions_for_terrain_area(VoxelLodTerrain &terrain, Box3i voxel_box);
 	void schedule_navigation_source_mesh_tasks();
-	void bake_prebuilt_navigation_meshes();
+	void schedule_navigation_source_mesh_tasks_for_regions(Span<const ManagedRegionKey> region_keys);
+	void bake_prebuilt_navigation_meshes(Span<VoxelNavRegion3D *> regions);
 
 	Ref<VoxelNavMeshSettings> _nav_mesh_settings;
 	StdVector<VoxelNavRegion3D *> _regions;
@@ -85,6 +114,9 @@ private:
 	uint64_t _nav_source_worker_time_msec = 0;
 	uint64_t _nav_source_apply_time_msec = 0;
 	uint64_t _nav_source_max_task_time_msec = 0;
+	StdVector<VoxelLodTerrain *> _connected_terrains;
+	StdUnorderedMap<ManagedRegionKey, VoxelNavRegion3D *, ManagedRegionKeyHasher> _region_map;
+	StdVector<VoxelNavRegion3D *> _pending_bake_regions;
 };
 
 } // namespace zylann::voxel

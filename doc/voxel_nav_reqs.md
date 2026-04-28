@@ -36,6 +36,7 @@ This document describes the current `VoxelNav` implementation requirements in co
 - `VoxelNavManager3D` shall mark generated regions so they can be recognized and cleared after editor reloads or stale manager state.
 - `VoxelNavManager3D` shall assign generated regions their terrain references, region coordinates, navigation layers, and nav mesh settings.
 - `VoxelNavManager3D` shall support rebuilding managed regions cheaply after terrain edits.
+- `VoxelNavManager3D` shall automatically observe terrain edits from the `VoxelLodTerrain` nodes it governs.
 - `VoxelNavManager3D` shall expose `nav_mesh_settings`.
 - `VoxelNavManager3D` shall expose `bake_on_ready`.
 - `VoxelNavManager3D` shall expose `navigation_layers`.
@@ -128,6 +129,23 @@ ceil(agent_radius / cell_size) * cell_size
 - Occupancy task results shall create scene nodes only from `apply_result()` on the main thread.
 - Stale occupancy task results shall be ignored using a rebuild generation id.
 
+## Terrain Change Invalidation
+
+- `VoxelLodTerrain` shall emit a main-thread signal when LOD0 terrain content changes.
+- The terrain-change signal shall report the edited LOD0 voxel area as a position and size.
+- `VoxelLodTerrain::post_edit_area()` shall emit the terrain-change signal after it records edited LOD0 blocks and voxel areas.
+- `VoxelLodTerrain::post_edit_modifiers()` shall emit the terrain-change signal for generator/modifier invalidated areas.
+- `VoxelNavManager3D` shall connect only to `VoxelLodTerrain` nodes discovered under its child tree, excluding terrains under managed `VoxelNavRegion3D` children.
+- On a terrain-change signal, `VoxelNavManager3D` shall compute the nav regions whose source geometry may include the edited voxels.
+- The affected-region calculation shall expand the edited LOD0 voxel area by the nav source border before converting to nav region coordinates.
+- Incremental terrain-change handling shall not clear or rebuild every generated region.
+- Incremental terrain-change handling shall schedule source mesh generation only for affected region coordinates.
+- If an affected region already exists, the manager shall regenerate source geometry and rebake only that region.
+- If an affected region does not exist but source generation finds collision geometry, the manager shall create a new generated `VoxelNavRegion3D` for that region and bake it.
+- If source generation finds no collision geometry for an affected existing region, the manager shall clear and remove that generated region.
+- Incremental terrain-change handling shall use the same LOD0 `VoxelData` plus generator fallback source path as normal manager baking.
+- Stale incremental source task results shall be ignored using the source-generation id.
+
 ## Source Geometry
 
 - Navigation source geometry shall be collision geometry.
@@ -214,6 +232,7 @@ classDiagram
     class VoxelLodTerrain {
         +voxel_bounds
         +mesh_block_size
+        +voxel_area_edited
         +get_storage_shared()
         +get_generator()
         +get_mesher()
@@ -280,5 +299,4 @@ flowchart TD
 - Direct `VoxelNavRegion3D::bake_navigation_mesh()` may still use the fallback terrain region source path.
 - The manager-driven path is the intended optimized path for large grids and terrain-edit rebuilds.
 - The standalone `VoxelNavRegion3D` path is the intended ergonomic path for manually placed/local navigation areas.
-- Runtime edit invalidation is not fully specified in this document.
 - Custom nav bake bounds beyond the generated region grid are not yet specified here.
