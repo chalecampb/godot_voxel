@@ -104,6 +104,7 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_voxel_graph_issue471);
 #endif
 	VOXEL_TEST(test_voxel_graph_unused_single_texture_output);
+	VOXEL_TEST(test_voxel_graph_rune_noise);
 	VOXEL_TEST(test_voxel_graph_spots2d_optimized_execution_map);
 	VOXEL_TEST(test_voxel_graph_unused_inner_output);
 	VOXEL_TEST(test_voxel_graph_function_execute);

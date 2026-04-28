@@ -1543,6 +1543,29 @@ void test_voxel_graph_unused_single_texture_output() {
 	}
 }
 
+void test_voxel_graph_rune_noise() {
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+
+	Ref<VoxelGraphFunction> func = generator->get_main_function();
+	ZN_TEST_ASSERT(func.is_valid());
+
+	const uint32_t n_rune_noise = func->create_node(VoxelGraphFunction::NODE_RUNE_NOISE, Vector2());
+	const uint32_t n_out_sdf = func->create_node(VoxelGraphFunction::NODE_OUTPUT_SDF, Vector2());
+	func->add_connection(n_rune_noise, 0, n_out_sdf, 0);
+
+	CompilationResult result = generator->compile(false);
+	ZN_TEST_ASSERT(result.success);
+
+	const float sd0 = generator->generate_single(Vector3i(0, 0, 0), VoxelBuffer::CHANNEL_SDF).f;
+	const float sd1 = generator->generate_single(Vector3i(37, 0, -19), VoxelBuffer::CHANNEL_SDF).f;
+	ZN_TEST_ASSERT(!math::is_nan(sd0));
+	ZN_TEST_ASSERT(!math::is_inf(sd0));
+	ZN_TEST_ASSERT(!math::is_nan(sd1));
+	ZN_TEST_ASSERT(!math::is_inf(sd1));
+	ZN_TEST_ASSERT(!Math::is_equal_approx(sd0, sd1));
+}
+
 // There was a bug where texture indices selected using a Spots2D node were returning garbage in areas that were
 // supposed to be optimized out. The bug doesn't happen if local execution map optimization is turned off. In those
 // areas, spots aren't present: range analysis finds Spots2D always returns 0, which means Select ignores it and outputs

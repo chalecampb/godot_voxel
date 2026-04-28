@@ -8,7 +8,7 @@ struct Node {
     const char *description;
 };
 
-static const unsigned int COUNT = 59;
+static const unsigned int COUNT = 60;
 static const Node g_data[COUNT] = {
     {"Abs", "Math", "If [code]x[/code] is negative, returns [code]x[/code] as a positive number. Otherwise, returns [code]x[/code]."},
     {"Add", "Ops", "Returns the sum of [code]a[/code] and [code]b[/code]"},
@@ -52,6 +52,7 @@ static const Node g_data[COUNT] = {
     {"Powi", "Math", "Returns the result of the power function ([code]x ^ power[/code]), where the exponent is a constant positive integer. May be faster than [code]Pow[/code]."},
     {"Relay", "Misc", "Pass-through node, allowing to better organize the path of long connections."},
     {"Remap", "Math", "For an input value [code]x[/code] in the range [code][min0, max0][/code], converts linearly into the [code][min1, max1][/code] range. For example, if [code]x[/code] is [code]min0[/code], then [code]min1[/code] will be returned. If [code]x[/code] is [code]max0[/code], then [code]max1[/code] will be returned. If [code]x[/code] is beyond the [code][min0, max0][/code] range, the result will be an extrapolation."},
+    {"RuneNoise", "Noise", "Returns a 2D eroded heightmap based on Rune Skovbo Johansen's clean terrain erosion filter. The [code]out[/code] output is the height, and [code]erosion[/code] outputs the normalized erosion delta mask."},
     {"SdfBox", "SDF", "Returns the signed distance field of an axis-aligned box centered at the origin, of size [code](size_x, size_y, size_z)[/code], at coordinates [code](x, y, z)[/code]."},
     {"SdfPlane", "SDF", "Returns the signed distance field of a plane facing the Y axis located at a given [code]height[/code], at coordinate [code]y[/code]."},
     {"SdfPreview", "SDF", "Debug node, not used in the final result. In the editor, shows a slice of the values emitted from the output it is connected to, according to boundary [code][min_value, max_value][/code]. The slice will be either along the XY plane or the XZ plane, depending on current settings."},

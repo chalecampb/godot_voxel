@@ -28,6 +28,9 @@ public:
 	inline Ref<VoxelGeneratorGraph> get_generator() const {
 		return _generator;
 	}
+	inline uint32_t get_node_id() const {
+		return _node_id;
+	}
 
 protected:
 	void _get_property_list(List<PropertyInfo> *p_list) const;

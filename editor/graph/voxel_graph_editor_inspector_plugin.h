@@ -13,6 +13,7 @@ class VoxelGraphEditorInspectorPlugin : public zylann::godot::ZN_EditorInspector
 	GDCLASS(VoxelGraphEditorInspectorPlugin, zylann::godot::ZN_EditorInspectorPlugin)
 protected:
 	bool _zn_can_handle(const Object *obj) const override;
+	void _zn_parse_begin(Object *p_object) override;
 	bool _zn_parse_property(Object *p_object, const Variant::Type p_type, const String &p_path,
 			const PropertyHint p_hint, const String &p_hint_text, const BitField<PropertyUsageFlags> p_usage,
 			const bool p_wide = false) override;

@@ -2,6 +2,7 @@
 #include "../../../util/noise/fast_noise_lite/fast_noise_lite.h"
 #include "../../../util/noise/fast_noise_lite/fast_noise_lite_range.h"
 #include "../../../util/noise/gd_noise_range.h"
+#include "../../../util/noise/rune_noise.h"
 #include "../../../util/noise/spot_noise.h"
 #include "../../../util/profiling.h"
 #include "../node_type_db.h"
@@ -769,6 +770,192 @@ void register_noise_nodes(Span<NodeType> types) {
 	}
 #endif // VOXEL_ENABLE_FAST_NOISE_2
 
+	{
+		NodeType &t = types[VoxelGraphFunction::NODE_RUNE_NOISE];
+		t.name = "RuneNoise";
+		t.category = CATEGORY_GENERATE;
+		t.inputs.push_back(NodeType::Port("x", 0.f, VoxelGraphFunction::AUTO_CONNECT_X));
+		t.inputs.push_back(NodeType::Port("y", 0.f, VoxelGraphFunction::AUTO_CONNECT_Z));
+		t.outputs.push_back(NodeType::Port("out"));
+		t.outputs.push_back(NodeType::Port("erosion"));
+		t.params.push_back(NodeType::Param("seed", Variant::INT, 0));
+		{
+			NodeType::Param p("erosion_scale", Variant::FLOAT, 0.08333f);
+			p.min_value = 0.0001f;
+			p.max_value = 1000000.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("erosion_strength", Variant::FLOAT, 0.16f);
+			p.min_value = 0.f;
+			p.max_value = 1.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("erosion_slope_power", Variant::FLOAT, 0.6f);
+			p.min_value = 0.01f;
+			p.max_value = 4.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("erosion_cell_scale", Variant::FLOAT, 1.f);
+			p.min_value = 0.0001f;
+			p.max_value = 1000000.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("erosion_height_offset", Variant::FLOAT, -0.5f);
+			p.min_value = -1.f;
+			p.max_value = 1.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("erosion_octaves", Variant::INT, 5);
+			p.min_value = 0;
+			p.max_value = 16;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("erosion_gain", Variant::FLOAT, 0.5f);
+			p.min_value = 0.f;
+			p.max_value = 1.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("erosion_lacunarity", Variant::FLOAT, 2.f);
+			p.min_value = 0.0001f;
+			p.max_value = 16.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("height_tiles", Variant::FLOAT, 3.f);
+			p.min_value = 0.0001f;
+			p.max_value = 1000000.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("height_octaves", Variant::INT, 3);
+			p.min_value = 1;
+			p.max_value = 16;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		t.params.push_back(NodeType::Param("height_amp", Variant::FLOAT, 0.25f));
+		{
+			NodeType::Param p("height_gain", Variant::FLOAT, 0.1f);
+			p.min_value = 0.f;
+			p.max_value = 1.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("height_lacunarity", Variant::FLOAT, 2.f);
+			p.min_value = 0.0001f;
+			p.max_value = 16.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("water_height", Variant::FLOAT, 0.465f);
+			p.min_value = 0.f;
+			p.max_value = 1.f;
+			p.has_range = true;
+			t.params.push_back(p);
+		}
+
+		t.compile_func = [](CompileContext &ctx) {
+			RuneNoiseParams params;
+			params.seed = ctx.get_param(0).operator int();
+			params.erosion_scale = ctx.get_param(1);
+			params.erosion_strength = ctx.get_param(2);
+			params.erosion_slope_power = ctx.get_param(3);
+			params.erosion_cell_scale = ctx.get_param(4);
+			params.erosion_height_offset = ctx.get_param(5);
+			params.erosion_octaves = math::clamp(ctx.get_param(6).operator int(), 0, 16);
+			params.erosion_gain = ctx.get_param(7);
+			params.erosion_lacunarity = ctx.get_param(8);
+			params.height_tiles = ctx.get_param(9);
+			params.height_octaves = math::clamp(ctx.get_param(10).operator int(), 1, 16);
+			params.height_amp = ctx.get_param(11);
+			params.height_gain = ctx.get_param(12);
+			params.height_lacunarity = ctx.get_param(13);
+			params.water_height = ctx.get_param(14);
+
+			if (params.erosion_scale <= 0.f) {
+				ctx.make_error(ZN_TTR("Erosion scale must be positive"));
+				return;
+			}
+			if (params.erosion_cell_scale <= 0.f) {
+				ctx.make_error(ZN_TTR("Erosion cell scale must be positive"));
+				return;
+			}
+			if (params.erosion_strength < 0.f) {
+				ctx.make_error(ZN_TTR("Erosion strength cannot be negative"));
+				return;
+			}
+			if (params.erosion_slope_power <= 0.f) {
+				ctx.make_error(ZN_TTR("Erosion slope power must be positive"));
+				return;
+			}
+			if (params.erosion_lacunarity <= 0.f || params.height_lacunarity <= 0.f) {
+				ctx.make_error(ZN_TTR("Lacunarity must be positive"));
+				return;
+			}
+			if (params.erosion_gain < 0.f || params.height_gain < 0.f) {
+				ctx.make_error(ZN_TTR("Gain cannot be negative"));
+				return;
+			}
+			if (params.height_tiles <= 0.f) {
+				ctx.make_error(ZN_TTR("Height tiles must be positive"));
+				return;
+			}
+
+			ctx.set_params(params);
+		};
+
+		t.process_buffer_func = [](Runtime::ProcessBufferContext &ctx) {
+			ZN_PROFILE_SCOPE_NAMED("NODE_RUNE_NOISE");
+			const Runtime::Buffer &x = ctx.get_input(0);
+			const Runtime::Buffer &y = ctx.get_input(1);
+			Runtime::Buffer &out = ctx.get_output(0);
+			Runtime::Buffer &erosion = ctx.get_output(1);
+			const RuneNoiseParams params = ctx.get_params<RuneNoiseParams>();
+			for (uint32_t i = 0; i < out.size; ++i) {
+				const Vector2f p(x.data[i], y.data[i]);
+				const RuneNoiseOutput rune_noise = get_rune_noise_2d(p, params);
+				out.data[i] = rune_noise.height;
+				erosion.data[i] = rune_noise.erosion;
+			}
+		};
+
+		t.range_analysis_func = [](Runtime::RangeAnalysisContext &ctx) {
+			const RuneNoiseParams params = ctx.get_params<RuneNoiseParams>();
+			const float height_magnitude =
+					Math::abs(params.height_amp) * 0.5f * rune_magnitude_sum(params.height_octaves, params.height_gain);
+			const float erosion_magnitude =
+					params.erosion_scale * params.erosion_strength *
+					rune_magnitude_sum(params.erosion_octaves, params.erosion_gain);
+			ctx.set_output(
+					0,
+					Interval(
+							0.5f - height_magnitude - erosion_magnitude +
+									math::min(0.f, erosion_magnitude * params.erosion_height_offset),
+							0.5f + height_magnitude + erosion_magnitude +
+									math::max(0.f, erosion_magnitude * params.erosion_height_offset)
+					)
+			);
+			ctx.set_output(1, Interval(-1.f, 1.f));
+		};
+	}
 	{
 		struct Params {
 			int32_t seed;

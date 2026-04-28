@@ -358,6 +358,30 @@
 			For an input value [code]x[/code] in the range [code]\[min0, max0][/code], converts linearly into the [code]\[min1, max1][/code] range. For example, if [code]x[/code] is [code]min0[/code], then [code]min1[/code] will be returned. If [code]x[/code] is [code]max0[/code], then [code]max1[/code] will be returned. If [code]x[/code] is beyond the [code]\[min0, max0][/code] range, the result will be an extrapolation.
 		</description>
 	</node>
+	<node name="RuneNoise" category="Noise">
+		<input name="x" default_value="0"/>
+		<input name="y" default_value="0"/>
+		<output name="out"/>
+		<output name="erosion"/>
+		<parameter name="seed" type="int" default_value="0"/>
+		<parameter name="erosion_scale" type="float" default_value="0.08333"/>
+		<parameter name="erosion_strength" type="float" default_value="0.16"/>
+		<parameter name="erosion_slope_power" type="float" default_value="0.6"/>
+		<parameter name="erosion_cell_scale" type="float" default_value="1"/>
+		<parameter name="erosion_height_offset" type="float" default_value="-0.5"/>
+		<parameter name="erosion_octaves" type="int" default_value="5"/>
+		<parameter name="erosion_gain" type="float" default_value="0.5"/>
+		<parameter name="erosion_lacunarity" type="float" default_value="2"/>
+		<parameter name="height_tiles" type="float" default_value="3"/>
+		<parameter name="height_octaves" type="int" default_value="3"/>
+		<parameter name="height_amp" type="float" default_value="0.25"/>
+		<parameter name="height_gain" type="float" default_value="0.1"/>
+		<parameter name="height_lacunarity" type="float" default_value="2"/>
+		<parameter name="water_height" type="float" default_value="0.465"/>
+		<description>
+			Returns a 2D eroded heightmap based on Rune Skovbo Johansen's clean terrain erosion filter. The [code]out[/code] output is the height, and [code]erosion[/code] outputs the normalized erosion delta mask.
+		</description>
+	</node>
 	<node name="SdfBox" category="SDF">
 		<input name="x" default_value="0"/>
 		<input name="y" default_value="0"/>

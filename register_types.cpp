@@ -115,6 +115,7 @@
 #include "editor/blocky_library/voxel_blocky_library_editor_plugin.h"
 #include "editor/fast_noise_lite/fast_noise_lite_editor_plugin.h"
 #include "editor/graph/graph_nodes_doc_tool.h"
+#include "editor/graph/rune_noise_viewer.h"
 #include "editor/graph/voxel_graph_editor_node_preview.h"
 #include "editor/graph/voxel_graph_editor_plugin.h"
 #include "editor/instance_library/control_sizer.h"
@@ -441,6 +442,7 @@ void initialize_voxel_module(ModuleInitializationLevel p_level) {
 #ifdef TOOLS_ENABLED
 	if (p_level == MODULE_INITIALIZATION_LEVEL_EDITOR) {
 		VoxelGraphEditorNodePreview::load_resources();
+		ClassDB::register_internal_class<RuneNoiseViewer>();
 
 #if defined(ZN_GODOT_EXTENSION)
 		// In GDExtension we have to explicitely register all classes deriving from Object even if they are not exposed

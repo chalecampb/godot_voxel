@@ -267,7 +267,7 @@ bool VoxelGraphNodeInspectorWrapper::_set(const StringName &p_name, const Varian
 		} else if (node_type_id == VoxelGraphFunction::NODE_COMMENT) {
 			ur.add_do_method(_graph_editor, "update_node_comment", _node_id);
 			ur.add_undo_method(_graph_editor, "update_node_comment", _node_id);
-		} else {
+		} else if (node_type_id != VoxelGraphFunction::NODE_RUNE_NOISE) {
 			ur.add_do_method(this, "notify_property_list_changed");
 			ur.add_undo_method(this, "notify_property_list_changed");
 		}
