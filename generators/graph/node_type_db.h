@@ -68,6 +68,7 @@ struct NodeType {
 		bool hidden = false;
 		Variant min_value;
 		Variant max_value;
+		String description;
 		StdVector<StdString> enum_items;
 
 		Param(String p_name, Variant::Type p_type, Variant p_default_value = Variant()) :

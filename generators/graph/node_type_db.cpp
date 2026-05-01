@@ -169,6 +169,7 @@ Dictionary NodeTypeDB::get_type_info_dict(uint32_t id) const {
 		d["type"] = p.type;
 		d["class_name"] = p.class_name;
 		d["default_value"] = p.default_value;
+		d["description"] = p.description;
 		params[i] = d;
 	}
 

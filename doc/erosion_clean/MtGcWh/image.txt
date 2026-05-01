@@ -1,0 +1,107 @@
+/*
+==========================================================================================
+
+This shader is the result of a long time dreaming of a noise function that looked like 
+eroded terrain, complete with branching structure, that could be run in a single pass 
+pixel shader. I wanted to avoid anything simulated because then you cannot easily make
+infinite terrains. 
+
+A word about the method used. I found guil's excellent "Gavoronoise" shader awhile back, 
+it is has a beautiful wavy look. I noticed that the direction of the waves was a based on
+mouse input. So I combined it with iq's wonderful gradient noise with analytical 
+derivatives. First I generate a heightmap with normals using FBM noise, based on the iq's 
+gradient noise. Then I use the curl of the derivatives to choose the direction for input 
+to guil's gavoronoise. This creates the effect of erosion running down the sides of hills.
+Lastly, I compute the analytic derivatives of the erosion noise and add the curl of it to
+the curl of the hills normals for each iteration, that way each layer of the erosion noise
+changes direction based on the previous layer, creating a branching effect.
+
+The noise and normals are generated in Buffer A. Image is just used to display the output.
+
+To see what the heightmap looks like as a terrain comment out line 31. I have not done
+anything to prettify the output, it is just a heightmap with simply phong shading.
+
+Credit to user guil for "Gavoronoise" (https://www.shadertoy.com/view/llsGWl) and to iq 
+for "Noise - Gradient - 2D - Deriv" (https://www.shadertoy.com/view/XdXBRH)
+
+==========================================================================================
+*/
+
+
+#define HEIGHTMAP
+//#define SHADED
+
+float map(vec2 x) {
+    return texture(iChannel0, x).x;
+}
+
+float march(vec3 ro, vec3 rd )
+{
+	float maxd = 1.5;
+    float t = 0.001;
+    for( int i=0; i<1400; i++ )
+    {
+        vec3 p = ro+rd*t;
+	    float h = map(p.xz);
+        bool b = p.x<0.0||p.x>1.0||p.z>1.0;
+        if (b) t=2.0;
+        
+        if( h>p.y || t>maxd) break;
+        t+=0.001;
+    }
+
+    if( t>maxd ) t=-1.0;
+    return t;
+}
+
+float lerp (float a, float b, float c) {
+    //float x = (c - a) / (b - a);
+    //return min(1.0, max(0.0, x));
+    return pow(smoothstep(b-0.01, b, c), 0.25);
+}
+
+
+void mainImage( out vec4 fragColor, in vec2 fragCoord )
+{
+	vec2 uv = fragCoord.xy / iResolution.xy;
+    vec3 ro = vec3(0.5, 1.0, -0.1);
+    vec3 rd = normalize(vec3(uv*2.0-1.0-vec2(0.0, 0.7), 1.0));
+    float t = march(ro, rd);
+    vec3 col = vec3(0.6, 0.3, 0.1);
+    if (t<0.0) {
+     col = vec3(0.6, 0.8, 1.0);   
+    } else {
+        vec3 pos = ro+rd*t;
+        vec3 n = texture(iChannel0, pos.xz).xyz*2.0-1.0;
+        vec3 sun = normalize(vec3(0.3, 0.8, 0.2));
+        
+        n = normalize(vec3(n.y, 0.6, n.z));
+        float b = dot(sun, n);
+      
+        col *= vec3(b);
+        
+    }
+    #ifdef HEIGHTMAP
+	fragColor = texture(iChannel0, uv).xxxw;
+    //uncomment if you want to see the heightmap with normals
+    //fragColor = texture(iChannel0, uv).xyzw;
+    #else
+	fragColor = vec4(col,1.0);
+    #endif
+    #ifdef SHADED
+    //Color inputs matching https://github.com/dandrino/terrain-erosion-3-ways
+    vec4 colors[5] = vec4[](vec4(0.00, 0.15, 0.3, 0.15),
+    			   	 vec4(0.4, 0.3, 0.45, 0.3),
+    			     vec4(0.5, 0.5, 0.5, 0.35),
+    			     vec4(0.6, 0.4, 0.36, 0.33),
+        			 vec4(0.7,1.0, 1.0, 1.0));
+    col = texture(iChannel0, uv).xyz;
+    vec3 outcol = colors[0].yzw;
+    outcol = mix(outcol, colors[1].yzw, lerp(colors[0].x, colors[1].x, col.x));
+    outcol = mix(outcol, colors[2].yzw, lerp(colors[1].x, colors[2].x, col.x));
+    outcol = mix(outcol, colors[3].yzw, lerp(colors[2].x, colors[3].x, col.x));
+    outcol = mix(outcol, colors[4].yzw, lerp(colors[3].x, colors[4].x, col.x));
+
+	fragColor = vec4(outcol*dot(vec3(0.5, 0.9, 0.1), normalize(vec3(col.y*2.0-1.0, 0.6, col.z*2.0-1.0))), 1.0);
+    #endif
+}

@@ -78,20 +78,22 @@ namespace {
 RuneNoiseParams get_rune_noise_params(const pg::VoxelGraphFunction &graph, const uint32_t node_id) {
 	RuneNoiseParams params;
 	params.seed = graph.get_node_param(node_id, 0).operator int();
-	params.erosion_scale = graph.get_node_param(node_id, 1);
-	params.erosion_strength = graph.get_node_param(node_id, 2);
-	params.erosion_slope_power = graph.get_node_param(node_id, 3);
-	params.erosion_cell_scale = graph.get_node_param(node_id, 4);
-	params.erosion_height_offset = graph.get_node_param(node_id, 5);
-	params.erosion_octaves = graph.get_node_param(node_id, 6).operator int();
-	params.erosion_gain = graph.get_node_param(node_id, 7);
-	params.erosion_lacunarity = graph.get_node_param(node_id, 8);
-	params.height_tiles = graph.get_node_param(node_id, 9);
-	params.height_octaves = graph.get_node_param(node_id, 10).operator int();
-	params.height_amp = graph.get_node_param(node_id, 11);
-	params.height_gain = graph.get_node_param(node_id, 12);
-	params.height_lacunarity = graph.get_node_param(node_id, 13);
-	params.water_height = graph.get_node_param(node_id, 14);
+	params.coord_scale = graph.get_node_param(node_id, 1);
+	params.erosion_scale = graph.get_node_param(node_id, 2);
+	params.erosion_strength = graph.get_node_param(node_id, 3);
+	params.erosion_slope_power = graph.get_node_param(node_id, 4);
+	params.erosion_cell_scale = graph.get_node_param(node_id, 5);
+	params.erosion_height_offset = graph.get_node_param(node_id, 6);
+	params.erosion_octaves = graph.get_node_param(node_id, 7).operator int();
+	params.erosion_gain = graph.get_node_param(node_id, 8);
+	params.erosion_lacunarity = graph.get_node_param(node_id, 9);
+	params.height_tiles = graph.get_node_param(node_id, 10);
+	params.height_octaves = graph.get_node_param(node_id, 11).operator int();
+	params.height_amp = graph.get_node_param(node_id, 12);
+	params.height_gain = graph.get_node_param(node_id, 13);
+	params.height_lacunarity = graph.get_node_param(node_id, 14);
+	params.water_height = graph.get_node_param(node_id, 15);
+	params.noise_scale = graph.get_node_param(node_id, 16);
 	return params;
 }
 

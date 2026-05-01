@@ -302,7 +302,7 @@ Returns 3D noise at coordinates `(x, y, z)` using one of the [Noise](https://doc
 
 Inputs: `x`, `y`
 Outputs: `out`, `erosion`
-Parameters: `seed`, `erosion_scale`, `erosion_strength`, `erosion_slope_power`, `erosion_cell_scale`, `erosion_height_offset`, `erosion_octaves`, `erosion_gain`, `erosion_lacunarity`, `height_tiles`, `height_octaves`, `height_amp`, `height_gain`, `height_lacunarity`, `water_height`
+Parameters: `seed`, `coord_scale`, `erosion_scale`, `erosion_strength`, `erosion_slope_power`, `erosion_cell_scale`, `erosion_height_offset`, `erosion_octaves`, `erosion_gain`, `erosion_lacunarity`, `height_tiles`, `height_octaves`, `height_amp`, `height_gain`, `height_lacunarity`, `water_height`, `noise_scale`
 
 Returns a 2D eroded heightmap based on Rune Skovbo Johansen's clean terrain erosion filter. The `out` output is the height, and `erosion` outputs the normalized erosion delta mask.
 

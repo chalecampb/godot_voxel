@@ -157,6 +157,7 @@ vec3 rune_erosion(
 vec2 rune_noise_2d(
 		vec2 p,
 		int seed,
+		float coord_scale,
 		float erosion_scale,
 		float erosion_strength,
 		float erosion_slope_power,
@@ -170,12 +171,16 @@ vec2 rune_noise_2d(
 		float height_amp,
 		float height_gain,
 		float height_lacunarity,
-		float water_height
+		float water_height,
+		float noise_scale
 ) {
+	p /= coord_scale;
 	vec3 n = rune_fractal_noise(p, height_tiles, height_octaves, height_lacunarity, height_gain, height_amp, seed);
 	n = n * 0.5 + vec3(0.5, 0.0, 0.0);
 
-	const float strength = erosion_strength * smoothstep(water_height - 0.1, water_height + 0.1, n.x);
+	const float water_feature = water_height > 0.001 ? 1.0 : 0.0;
+	const float water_selector = smoothstep(water_height - 0.1, water_height + 0.1, n.x);
+	const float strength = erosion_strength * mix(1.0, water_selector, water_feature);
 	const vec3 h = rune_erosion(
 			p,
 			n,
@@ -189,7 +194,10 @@ vec2 rune_noise_2d(
 			seed
 	);
 	const float erosion_magnitude = erosion_scale * strength * rune_magnitude_sum(erosion_octaves, erosion_gain);
-	const float height = n.x + h.x + erosion_magnitude * erosion_height_offset;
+	const float eroded_height = n.x + h.x + erosion_magnitude * erosion_height_offset;
+	const float shoreline_width = 0.12;
+	const float water_mask = water_feature * (1.0 - smoothstep(water_height - shoreline_width, water_height, eroded_height));
+	const float height = mix(eroded_height, water_height, water_mask) * noise_scale;
 	const float erosion = erosion_magnitude > 0.0 ? h.x / erosion_magnitude : 0.0;
 	return vec2(height, erosion);
 }
@@ -947,12 +955,25 @@ void register_noise_nodes(Span<NodeType> types) {
 		t.inputs.push_back(NodeType::Port("y", 0.f, VoxelGraphFunction::AUTO_CONNECT_Z));
 		t.outputs.push_back(NodeType::Port("out"));
 		t.outputs.push_back(NodeType::Port("erosion"));
-		t.params.push_back(NodeType::Param("seed", Variant::INT, 0));
+		{
+			NodeType::Param p("seed", Variant::INT, 0);
+			p.description = "Random seed used by the height and erosion noise.";
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("coord_scale", Variant::FLOAT, 1000.f);
+			p.min_value = 1.f;
+			p.max_value = 10000.f;
+			p.has_range = true;
+			p.description = "Uniform coordinate scale. Input x and y are sampled as x / coord_scale and y / coord_scale.";
+			t.params.push_back(p);
+		}
 		{
 			NodeType::Param p("erosion_scale", Variant::FLOAT, 0.08333f);
 			p.min_value = 0.0001f;
-			p.max_value = 1000000.f;
+			p.max_value = 100.f;
 			p.has_range = true;
+			p.description = "Overall size of the erosion filter in noise-space units.";
 			t.params.push_back(p);
 		}
 		{
@@ -960,20 +981,23 @@ void register_noise_nodes(Span<NodeType> types) {
 			p.min_value = 0.f;
 			p.max_value = 1.f;
 			p.has_range = true;
+			p.description = "Amount of erosion applied where the water feature is active.";
 			t.params.push_back(p);
 		}
 		{
 			NodeType::Param p("erosion_slope_power", Variant::FLOAT, 0.6f);
 			p.min_value = 0.01f;
-			p.max_value = 4.f;
+			p.max_value = 0.6f;
 			p.has_range = true;
+			p.description = "How strongly terrain slope influences erosion. Higher values emphasize steep slopes.";
 			t.params.push_back(p);
 		}
 		{
-			NodeType::Param p("erosion_cell_scale", Variant::FLOAT, 1.f);
+			NodeType::Param p("erosion_cell_scale", Variant::FLOAT, 0.5f);
 			p.min_value = 0.0001f;
-			p.max_value = 1000000.f;
+			p.max_value = 0.5f;
 			p.has_range = true;
+			p.description = "Cell scale of the gully pattern. Values above 0.5 can produce unstable artifacts.";
 			t.params.push_back(p);
 		}
 		{
@@ -981,6 +1005,7 @@ void register_noise_nodes(Span<NodeType> types) {
 			p.min_value = -1.f;
 			p.max_value = 1.f;
 			p.has_range = true;
+			p.description = "Vertical offset applied from the computed erosion magnitude.";
 			t.params.push_back(p);
 		}
 		{
@@ -988,6 +1013,7 @@ void register_noise_nodes(Span<NodeType> types) {
 			p.min_value = 0;
 			p.max_value = 16;
 			p.has_range = true;
+			p.description = "Number of erosion noise octaves. More octaves add finer gully detail.";
 			t.params.push_back(p);
 		}
 		{
@@ -995,6 +1021,7 @@ void register_noise_nodes(Span<NodeType> types) {
 			p.min_value = 0.f;
 			p.max_value = 1.f;
 			p.has_range = true;
+			p.description = "Amplitude multiplier between erosion octaves.";
 			t.params.push_back(p);
 		}
 		{
@@ -1002,13 +1029,15 @@ void register_noise_nodes(Span<NodeType> types) {
 			p.min_value = 0.0001f;
 			p.max_value = 16.f;
 			p.has_range = true;
+			p.description = "Frequency multiplier between erosion octaves.";
 			t.params.push_back(p);
 		}
 		{
 			NodeType::Param p("height_tiles", Variant::FLOAT, 3.f);
 			p.min_value = 0.0001f;
-			p.max_value = 1000000.f;
+			p.max_value = 10.f;
 			p.has_range = true;
+			p.description = "Base frequency of the height noise after coordinate scaling.";
 			t.params.push_back(p);
 		}
 		{
@@ -1016,14 +1045,20 @@ void register_noise_nodes(Span<NodeType> types) {
 			p.min_value = 1;
 			p.max_value = 16;
 			p.has_range = true;
+			p.description = "Number of height noise octaves. More octaves add finer terrain variation.";
 			t.params.push_back(p);
 		}
-		t.params.push_back(NodeType::Param("height_amp", Variant::FLOAT, 0.25f));
+		{
+			NodeType::Param p("height_amp", Variant::FLOAT, 0.25f);
+			p.description = "Amplitude of the raw height noise before water flattening and output scaling.";
+			t.params.push_back(p);
+		}
 		{
 			NodeType::Param p("height_gain", Variant::FLOAT, 0.1f);
 			p.min_value = 0.f;
 			p.max_value = 1.f;
 			p.has_range = true;
+			p.description = "Amplitude multiplier between height octaves.";
 			t.params.push_back(p);
 		}
 		{
@@ -1031,6 +1066,7 @@ void register_noise_nodes(Span<NodeType> types) {
 			p.min_value = 0.0001f;
 			p.max_value = 16.f;
 			p.has_range = true;
+			p.description = "Frequency multiplier between height octaves.";
 			t.params.push_back(p);
 		}
 		{
@@ -1038,27 +1074,43 @@ void register_noise_nodes(Span<NodeType> types) {
 			p.min_value = 0.f;
 			p.max_value = 1.f;
 			p.has_range = true;
+			p.description =
+					"Height used for the flat water feature. Values at or below 0.001 disable water feature generation.";
+			t.params.push_back(p);
+		}
+		{
+			NodeType::Param p("noise_scale", Variant::FLOAT, 30.f);
+			p.min_value = 0.f;
+			p.max_value = 100.f;
+			p.has_range = true;
+			p.description = "Final multiplier applied to the generated height output.";
 			t.params.push_back(p);
 		}
 
 		t.compile_func = [](CompileContext &ctx) {
 			RuneNoiseParams params;
 			params.seed = ctx.get_param(0).operator int();
-			params.erosion_scale = ctx.get_param(1);
-			params.erosion_strength = ctx.get_param(2);
-			params.erosion_slope_power = ctx.get_param(3);
-			params.erosion_cell_scale = ctx.get_param(4);
-			params.erosion_height_offset = ctx.get_param(5);
-			params.erosion_octaves = math::clamp(ctx.get_param(6).operator int(), 0, 16);
-			params.erosion_gain = ctx.get_param(7);
-			params.erosion_lacunarity = ctx.get_param(8);
-			params.height_tiles = ctx.get_param(9);
-			params.height_octaves = math::clamp(ctx.get_param(10).operator int(), 1, 16);
-			params.height_amp = ctx.get_param(11);
-			params.height_gain = ctx.get_param(12);
-			params.height_lacunarity = ctx.get_param(13);
-			params.water_height = ctx.get_param(14);
+			params.coord_scale = ctx.get_param(1);
+			params.erosion_scale = ctx.get_param(2);
+			params.erosion_strength = ctx.get_param(3);
+			params.erosion_slope_power = ctx.get_param(4);
+			params.erosion_cell_scale = ctx.get_param(5);
+			params.erosion_height_offset = ctx.get_param(6);
+			params.erosion_octaves = math::clamp(ctx.get_param(7).operator int(), 0, 16);
+			params.erosion_gain = ctx.get_param(8);
+			params.erosion_lacunarity = ctx.get_param(9);
+			params.height_tiles = ctx.get_param(10);
+			params.height_octaves = math::clamp(ctx.get_param(11).operator int(), 1, 16);
+			params.height_amp = ctx.get_param(12);
+			params.height_gain = ctx.get_param(13);
+			params.height_lacunarity = ctx.get_param(14);
+			params.water_height = ctx.get_param(15);
+			params.noise_scale = ctx.get_param(16);
 
+			if (params.coord_scale <= 0.f) {
+				ctx.make_error(ZN_TTR("Coordinate scale must be positive"));
+				return;
+			}
 			if (params.erosion_scale <= 0.f) {
 				ctx.make_error(ZN_TTR("Erosion scale must be positive"));
 				return;
@@ -1087,6 +1139,10 @@ void register_noise_nodes(Span<NodeType> types) {
 				ctx.make_error(ZN_TTR("Height tiles must be positive"));
 				return;
 			}
+			if (params.noise_scale < 0.f) {
+				ctx.make_error(ZN_TTR("Noise scale cannot be negative"));
+				return;
+			}
 
 			ctx.set_params(params);
 		};
@@ -1109,16 +1165,17 @@ void register_noise_nodes(Span<NodeType> types) {
 		t.range_analysis_func = [](Runtime::RangeAnalysisContext &ctx) {
 			const RuneNoiseParams params = ctx.get_params<RuneNoiseParams>();
 			const float height_magnitude =
-					Math::abs(params.height_amp) * 0.5f * rune_magnitude_sum(params.height_octaves, params.height_gain);
+					Math::abs(params.height_amp) * 0.5f *
+					rune_magnitude_sum(params.height_octaves, params.height_gain) * params.noise_scale;
 			const float erosion_magnitude =
 					params.erosion_scale * params.erosion_strength *
-					rune_magnitude_sum(params.erosion_octaves, params.erosion_gain);
+					rune_magnitude_sum(params.erosion_octaves, params.erosion_gain) * params.noise_scale;
 			ctx.set_output(
 					0,
 					Interval(
-							0.5f - height_magnitude - erosion_magnitude +
+							0.5f * params.noise_scale - height_magnitude - erosion_magnitude +
 									math::min(0.f, erosion_magnitude * params.erosion_height_offset),
-							0.5f + height_magnitude + erosion_magnitude +
+							0.5f * params.noise_scale + height_magnitude + erosion_magnitude +
 									math::max(0.f, erosion_magnitude * params.erosion_height_offset)
 					)
 			);
@@ -1129,32 +1186,35 @@ void register_noise_nodes(Span<NodeType> types) {
 		t.shader_gen_func = [](ShaderGenContext &ctx) {
 			RuneNoiseParams params;
 			params.seed = ctx.get_param(0).operator int();
-			params.erosion_scale = ctx.get_param(1);
-			params.erosion_strength = ctx.get_param(2);
-			params.erosion_slope_power = ctx.get_param(3);
-			params.erosion_cell_scale = ctx.get_param(4);
-			params.erosion_height_offset = ctx.get_param(5);
-			params.erosion_octaves = math::clamp(ctx.get_param(6).operator int(), 0, 16);
-			params.erosion_gain = ctx.get_param(7);
-			params.erosion_lacunarity = ctx.get_param(8);
-			params.height_tiles = ctx.get_param(9);
-			params.height_octaves = math::clamp(ctx.get_param(10).operator int(), 1, 16);
-			params.height_amp = ctx.get_param(11);
-			params.height_gain = ctx.get_param(12);
-			params.height_lacunarity = ctx.get_param(13);
-			params.water_height = ctx.get_param(14);
+			params.coord_scale = ctx.get_param(1);
+			params.erosion_scale = ctx.get_param(2);
+			params.erosion_strength = ctx.get_param(3);
+			params.erosion_slope_power = ctx.get_param(4);
+			params.erosion_cell_scale = ctx.get_param(5);
+			params.erosion_height_offset = ctx.get_param(6);
+			params.erosion_octaves = math::clamp(ctx.get_param(7).operator int(), 0, 16);
+			params.erosion_gain = ctx.get_param(8);
+			params.erosion_lacunarity = ctx.get_param(9);
+			params.height_tiles = ctx.get_param(10);
+			params.height_octaves = math::clamp(ctx.get_param(11).operator int(), 1, 16);
+			params.height_amp = ctx.get_param(12);
+			params.height_gain = ctx.get_param(13);
+			params.height_lacunarity = ctx.get_param(14);
+			params.water_height = ctx.get_param(15);
+			params.noise_scale = ctx.get_param(16);
 
 			ctx.require_lib_code("vg_rune_noise", g_rune_noise_shader);
 			ctx.add_format(
 					"vec2 rune_output = rune_noise_2d("
 					"vec2({}, {}), "
-					"{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}"
+					"{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}"
 					");\n"
 					"{} = rune_output.x;\n"
 					"{} = rune_output.y;\n",
 					ctx.get_input_name(0),
 					ctx.get_input_name(1),
 					params.seed,
+					params.coord_scale,
 					params.erosion_scale,
 					params.erosion_strength,
 					params.erosion_slope_power,
@@ -1169,6 +1229,7 @@ void register_noise_nodes(Span<NodeType> types) {
 					params.height_gain,
 					params.height_lacunarity,
 					params.water_height,
+					params.noise_scale,
 					ctx.get_output_name(0),
 					ctx.get_output_name(1)
 			);

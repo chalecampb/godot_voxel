@@ -2,6 +2,11 @@
 #include "editor_property_text_change_on_submit.h"
 #include "rune_noise_viewer.h"
 #include "voxel_graph_node_inspector_wrapper.h"
+#include "../../generators/graph/node_type_db.h"
+
+#if defined(ZN_GODOT)
+#include <editor/editor_interface.h>
+#endif
 
 namespace zylann::voxel {
 
@@ -22,6 +27,16 @@ void VoxelGraphEditorInspectorPlugin::_zn_parse_begin(Object *p_object) {
 	if (!graph->has_node(node_id)) {
 		return;
 	}
+
+	const pg::NodeType &node_type = pg::NodeTypeDB::get_singleton().get_type(graph->get_node_type_id(node_id));
+#if defined(ZN_GODOT)
+	EditorInspector *inspector = EditorInterface::get_singleton()->get_inspector();
+	if (inspector != nullptr) {
+		for (const pg::NodeType::Param &param : node_type.params) {
+			inspector->add_custom_property_description(wrapper->get_class_name(), param.name, param.description);
+		}
+	}
+#endif
 
 	if (graph->get_node_type_id(node_id) == pg::VoxelGraphFunction::NODE_RUNE_NOISE) {
 		RuneNoiseViewer *viewer = memnew(RuneNoiseViewer);

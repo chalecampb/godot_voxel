@@ -325,6 +325,27 @@ bool VoxelGraphNodeInspectorWrapper::_get(const StringName &p_name, Variant &r_r
 	return false;
 }
 
+#if defined(ZN_GODOT_EXTENSION)
+String VoxelGraphNodeInspectorWrapper::_get_property_warning(const StringName &p_name) const {
+	Ref<VoxelGraphFunction> graph = get_graph();
+	ERR_FAIL_COND_V(graph.is_null(), String());
+
+	if (!graph->has_node(_node_id)) {
+		return String();
+	}
+
+	uint32_t index;
+	if (!graph->get_node_param_index_by_name(_node_id, p_name, index)) {
+		return String();
+	}
+
+	const uint32_t node_type_id = graph->get_node_type_id(_node_id);
+	const NodeType &node_type = NodeTypeDB::get_singleton().get_type(node_type_id);
+	ERR_FAIL_INDEX_V(index, node_type.params.size(), String());
+	return node_type.params[index].description;
+}
+#endif
+
 // This method is an undocumented hack used in `EditorInspector::_edit_set` so we can implement UndoRedo ourselves.
 // If we don't do this, then the inspector's UndoRedo will use the wrapper, which won't mark the real resource as
 // modified.
@@ -333,6 +354,9 @@ bool VoxelGraphNodeInspectorWrapper::_dont_undo_redo() const {
 }
 
 void VoxelGraphNodeInspectorWrapper::_bind_methods() {
+#if defined(ZN_GODOT_EXTENSION)
+	ClassDB::bind_method(D_METHOD("_get_property_warning", "property"), &VoxelGraphNodeInspectorWrapper::_get_property_warning);
+#endif
 	ClassDB::bind_method(D_METHOD("_dont_undo_redo"), &VoxelGraphNodeInspectorWrapper::_dont_undo_redo);
 }
 

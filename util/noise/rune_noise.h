@@ -10,6 +10,7 @@ namespace zylann::voxel {
 
 struct RuneNoiseParams {
 	int32_t seed;
+	float coord_scale;
 	float erosion_scale;
 	float erosion_strength;
 	float erosion_slope_power;
@@ -24,6 +25,7 @@ struct RuneNoiseParams {
 	float height_gain;
 	float height_lacunarity;
 	float water_height;
+	float noise_scale;
 };
 
 struct RuneNoiseOutput {
@@ -161,6 +163,7 @@ inline Vector3f rune_erosion(
 }
 
 inline RuneNoiseOutput get_rune_noise_2d(Vector2f p, const RuneNoiseParams &params) {
+	p = p / params.coord_scale;
 	Vector3f n = rune_fractal_noise(
 			p,
 			params.height_tiles,
@@ -172,8 +175,10 @@ inline RuneNoiseOutput get_rune_noise_2d(Vector2f p, const RuneNoiseParams &para
 	);
 	n = n * 0.5f + Vector3f(0.5f, 0.f, 0.f);
 
-	const float strength = params.erosion_strength *
+	const float water_feature = params.water_height > 0.001f ? 1.f : 0.f;
+	const float water_selector =
 			math::smoothstep(params.water_height - 0.1f, params.water_height + 0.1f, n.x);
+	const float strength = params.erosion_strength * Math::lerp(1.f, water_selector, water_feature);
 	const Vector3f h = rune_erosion(
 			p,
 			n,
@@ -190,7 +195,11 @@ inline RuneNoiseOutput get_rune_noise_2d(Vector2f p, const RuneNoiseParams &para
 			params.erosion_scale * strength * rune_magnitude_sum(params.erosion_octaves, params.erosion_gain);
 
 	RuneNoiseOutput out;
-	out.height = n.x + h.x + erosion_magnitude * params.erosion_height_offset;
+	const float eroded_height = n.x + h.x + erosion_magnitude * params.erosion_height_offset;
+	const float shoreline_width = 0.12f;
+	const float water_mask =
+			water_feature * (1.f - math::smoothstep(params.water_height - shoreline_width, params.water_height, eroded_height));
+	out.height = Math::lerp(eroded_height, params.water_height, water_mask) * params.noise_scale;
 	out.erosion = erosion_magnitude > 0.f ? h.x / erosion_magnitude : 0.f;
 	return out;
 }

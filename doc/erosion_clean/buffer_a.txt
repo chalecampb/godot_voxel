@@ -1,0 +1,325 @@
+/*
+Comment by Rune Skovbo Johansen :
+
+	This shader is originally derived from Fewes' highly polished "Terrain Erosion Noise":
+	https://www.shadertoy.com/view/7ljcRW
+
+	I wanted to make the erosion effect easier to apply to any height function as a filter.
+	I first split out the erosion part into a standalone function, but when applying it to new
+	terrains, it was still counter-intuitive and error-prone figuring out which parameter
+	combinations would produce sensible results.
+
+	Investigating the code more in depth, I found a number of places where the derivatives were not
+	consistent with the heights.
+
+	 1) In the original Erosion function (renamed to Gullies in my code) the derivatives were 2*pi
+	    times too small.
+	 2) In the Heightmap function, the heights were halved to bring them from [-1, 1] range to
+	    [0, 1] range, but the derivatives were not halved too, making them two times too large.
+	 3) In the erosion loop, the input coordinates to the Erosion function (now Gullies) were
+	    multiplied by EROSION_TILES (default 4), making the derivatives too small by that factor.
+	 4) In the derivatives passed to the Erosion function (now Gullies), the part from the
+	    original slope and the part from previous gullies could be manipulated independently
+		with the variables EROSION_SLOPE_STRENGTH and EROSION_BRANCH_STRENGTH, producing resulting
+		derivatives that might have a different slope direction than the actual surface.
+        By default EROSION_SLOPE_STRENGTH and EROSION_BRANCH_STRENGTH were both 3 though.
+	 5) The height delta between the eroded terrain and the original terrain was multiplied by a
+	    small EROSION_STRENGTH value (default 0.04), making the final surface not match up with
+		the derivatives the erosion calculations were based on.
+
+	All these inconsistencies in the derivatives meant that the gullies were not always created
+	along the direction of steepest descent, i.e. the direction water would run down the slope.
+	It also meant the final derivatives had no guarantee of matching the actual surface.
+    
+    Funnily enough though, when using the default parameter values, the discrepancies in 1), 3),
+    and 5) essentially cancel out, as 2*pi * 4 * 0.04 is very close to 1. That's probably why
+    Fewes' results look very natural despite the discrepancies in the calculations.
+
+	After fixing the derivatives I was pleased to see that the gullies branched out very nicely
+	without any need for an EROSION_BRANCH_STRENGTH variable, and that there was no need to scale
+	the erosion delta with any final EROSION_STRENGTH adjustment factor. I cannot be certain that
+	there aren't still any derivative inconsistencies left (or introduced by me), but in any case,
+	results from the filter seem to be more consistent and predictable, without relying on
+	arbitrary constants.
+
+	The refactored code treats the surface slopes prior to each erosion iteration the same way,
+	giving no special treatment to the initial input slopes. An EROSION_STRENGTH parameter
+	(unrelated to the original of the same name) controls the depth of the gullies, which affects
+	both height and derivatives. Gullies naturally branch out more the higher the EROSION_STRENGTH
+	parameter is, since the surface slope is affected more by the gullies.
+
+	The eroded effect in the original shader had rather rounded mountain peaks and ridges. I've
+	added an EROSION_SLOPE_POWER parameter which can control the sharpness. Since it only modifies
+	the length of the input derivatives passed to the Gullies function, no inconsistencies in gully
+	directions or final derivatives are introduced.
+
+	I've consolidated all scale dependent variables into a single EROSION_SCALE parameter to make
+	it easier to make the erosion work for heightmaps of different scales. When trying to use the
+	erosion filter on a height function, the most important thing is to ensure that the horizontal
+	and vertical scale of the height function use the same units, and that the derivatives of the
+	height function are correct. The second most important is to find a fitting EROSION_SCALE
+	value - try with the width of a mountain divided by five to ten. Results should be decent with
+	all other parameters left at default values.
+
+	The gullies in each iteration come from a type of noise with strong directionality, produced by
+	blending between sine wave stripes contributed by each cell in a Voronoi-like pattern. I've
+	introduced an EROSION_CELL_SCALE parameter which can be used to control the cell size (relative
+	to the EROSION_SCALE), independently from gully widths or depths. The cell size represents a
+	trade-off: Smaller values decrease the lengths of gullies, making them appear more grainy.
+	Larger values produce chaotic curved gullies, caused by the rotation of the gully stripes (to
+	match the slope direction) producing more sideways gully movement the larger the cells are.
+
+Comment by Fewes from https://www.shadertoy.com/view/7ljcRW :
+
+	This shader is a fork of clayjohn's awesome "Eroded Terrain Noise":
+	https://www.shadertoy.com/view/MtGcWh
+
+	The original function seemed to have some biasing problems which I've attempted to fix.
+	I also wanted to improve the visualization to really show how great the result is.
+	I take no credit for the actual noise/math. I simply wanted to help showcase it.
+
+Comment by Clay John from https://www.shadertoy.com/view/MtGcWh :
+
+	This shader is the result of a long time dreaming of a noise function that looked like 
+	eroded terrain, complete with branching structure, that could be run in a single pass 
+	pixel shader. I wanted to avoid anything simulated because then you cannot easily make
+	infinite terrains. 
+
+	A word about the method used. I found guil's excellent "Gavoronoise" shader awhile back, 
+	it is has a beautiful wavy look. I noticed that the direction of the waves was a based on
+	mouse input. So I combined it with iq's wonderful gradient noise with analytical 
+	derivatives. First I generate a heightmap with normals using FBM noise, based on the iq's 
+	gradient noise. Then I use the curl of the derivatives to choose the direction for input 
+	to guil's gavoronoise. This creates the effect of erosion running down the sides of hills.
+	Lastly, I compute the analytic derivatives of the erosion noise and add the curl of it to
+	the curl of the hills normals for each iteration, that way each layer of the erosion noise
+	changes direction based on the previous layer, creating a branching effect.
+
+	The noise and normals are generated in Buffer A. Image is just used to display the output.
+
+	To see what the heightmap looks like as a terrain comment out line 31. I have not done
+	anything to prettify the output, it is just a heightmap with simply phong shading.
+
+	Credit to user guil for "Gavoronoise" (https://www.shadertoy.com/view/llsGWl) and to iq 
+	for "Noise - Gradient - 2D - Deriv" (https://www.shadertoy.com/view/XdXBRH)
+
+*/
+
+// Copyright 2025 Rune Skovbo Johansen
+// Copyright 2023 Fewes
+// Copyright 2020 Clay John
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software 
+// and associated documentation files (the "Software"), to deal in the Software without
+// restriction, including without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+// Software is furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all copies or 
+// substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+// BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+// NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+/*
+==========================================================================================
+
+Buffer A generates the heightmap (X), normals (YZ) and erosion mask used for coloring (W)
+
+==========================================================================================
+*/
+
+// Produce gullies (height offset and slope/derivatives) orthogonal to the input slope.
+// Steeper slopes produce more high frequency gullies. The amplitude is always one.
+// The function is a type of noise with strong directionality, produced by blending between
+// sine wave stripes contributed by each cell in a Voronoi-like pattern.
+// The sine waves of all cells are along the same direction: Orthogonal to the slope direction,
+// meaning the wave stripes run along the slope. Both frequency and phase are relative to the
+// cell center, so that small changes in slope only produce small changes in output.
+//
+// Gullies function by Rune Skovbo Johansen, derived from erosion function by Clay John,
+// with the following changes:
+// - Stripes are parallel to the input direction rather than orthogonal to it.
+// - Derivatives have correct magnitude.
+// - Code is slightly more optimized, front-loading calculations outside the for-loops.
+// - Variable names are descriptive and comments are verbose, for easier understanding.
+vec3 Gullies(in vec2 p, vec2 slope) {
+    // Get a vector orthogonal to the slope, with a proportional magnitude. Front-load the
+    // multiplication by 2 pi, since every usage of sideDir multiplied with that anyway.
+    vec2 sideDir = slope.yx * vec2(-1.0, 1.0) * 2.0 * PI;
+
+    // Iterate over 4x4 cells, calculating a stripe pattern for each and blending between them.
+    // pInt is the integer part of the current coordinate p, pFrac is the remainder.
+    //
+    // o   o   o   o
+    //
+    // o   o   o   o
+    //       p
+    // o   i   o   o
+    //
+    // o   o   o   o
+    //
+    // p: current coordinate    i: integer part of p    o: grid points for 4x4 cells
+    //
+    vec2 pInt = floor(p);
+    vec2 pFrac = fract(p);
+    vec3 heightAndSlope = vec3(0.0);
+    float weightSum = 0.0;
+    for (int i = -1; i <= 2; i++) {
+        for (int j = -1; j <= 2; j++) {
+            vec2 gridOffset = vec2(i, j);
+
+            // Calculate a cell point by starting off with a point in an integer grid.
+            vec2 gridPoint = pInt + gridOffset;
+
+            // Calculate a random offset for the cell point between -0.5 and 0.5 on each axis.
+            vec2 randomOffset = hash(gridPoint) * 0.5;
+
+            // The final cell point (we don't store it) is the gridPoint plus the randomOffset.
+            // Calculate a vector representing the input point relative to this cell point:
+            // p - (gridPoint + randomOffset)
+            // = (pFrac + pInt) - ((pInt + gridOffset) + randomOffset)
+            // = pFrac + pInt - pInt - gridOffset - randomOffset
+            // = pFrac - gridOffset - randomOffset
+            vec2 vectorFromCellPoint = pFrac - gridOffset - randomOffset;
+
+            // Bell-shaped weight function which is 1 at dist 0 and 0 at dist 1.5.
+            // Due to the random offsets of up to 0.5, the closest a cell point not in the 4x4
+            // grid can be to the current point is 1.5 units away.
+            // The subtraction of 0.01111 is to make the function actually 0 at distance 1.5,
+            // which avoids some (very subltle) grid line artefacts.
+            float sqrDist = dot(vectorFromCellPoint, vectorFromCellPoint);
+            float weight = max(0.0, exp(-sqrDist * 2.0) - 0.01111);
+
+            // Keep track of total sum of weights.
+            weightSum += weight;
+
+            // The waveInput is a gradient which increases in value along sideDir (sideways
+            // along the terrain slope). Its rate of change is the slope times 2 pi, due to the
+            // 2 pi multiplier pre-applied to sideDir.
+            float waveInput = dot(vectorFromCellPoint, sideDir);
+
+            // Add a wave along sideDir. The longer sideDir is, the higher frequency the wave.
+            // This means we get more high-frequency creases on steeper slopes.
+            // Note that the fact we use cos() for the height (and not sin()) has a significant
+            // effect on mountain peaks. Since the slope and hence the frequency is zero there,
+            // cos() ensures this evaluates to the maximum value in the wave, meaning peaks
+            // "get no erosion".
+            heightAndSlope += vec3(
+                cos(waveInput), // Amplitude of the wave
+                -sin(waveInput) * sideDir // Analytical derivative of the wave
+                // Correct derivatives would also involve applying the chain rule here,
+                // but as it seems to look worse, it's disabled here:
+                //+ cos(waveInput) * 4.0 * vectorFromCellPoint 
+            ) * weight;
+        }
+    }
+    return heightAndSlope / weightSum;
+}
+
+// Apply an erosion filter inspired by Fractal Brownian Motion type noise.
+// Over several iterations, gullies are added as sine wave stripes that run parallel to the
+// terrain slope. The gullies modify the slope, causing the next iteration of gullies to branch
+// out at an angle to the previous ones.
+vec3 Erosion(
+    in vec2 p, vec3 heightAndSlope, float scale, float strength, float slopePower,
+    float cellScale, int octaves, float gain, float lacunarity
+) {
+    vec3 inputHeightAndSlope = heightAndSlope;
+    float freq = 1.0 / (scale * cellScale);
+    strength *= scale;
+    for (int i = 0; i < octaves; i++) {
+        // Adjust the slope given to the Gullies function, without influencing the final slope.
+        // The calculation is equivalent to raising the length of the slope to slopePower.
+        float sqrLen = dot(heightAndSlope.yz, heightAndSlope.yz);
+        vec2 inputSlope = heightAndSlope.yz * pow(sqrLen, 0.5 * (slopePower - 1.0));
+
+        // Calculate and add gullies to the height and slope.
+        heightAndSlope += Gullies(p * freq, inputSlope * cellScale)
+            * strength * vec3(1, freq, freq);
+
+        // Prepare the next octave.
+        strength *= gain;
+        freq *= lacunarity;
+    }
+    return heightAndSlope - inputHeightAndSlope;
+}
+
+vec3 FractalNoise(vec2 p, float freq, int octaves, float lacunarity, float gain) {
+    vec3 n = vec3(0.0);
+    float nf = freq;
+    float na = 1.0;
+    for (int i = 0; i < octaves; i++) {
+        n += noised(p * nf) * na * vec3(1.0, nf, nf);
+        na *= gain;
+        nf *= lacunarity;
+    }
+    return n;
+}
+
+// Use the geometric series to calculate the extents of layered noise where the first layer has
+// magnitude 1 and each successive layer is multiplied with gain.
+float MagnitudeSum(int octaves, float gain) {
+    return (1.0 - pow(gain, float(octaves))) / (1.0 - gain);
+}
+
+vec2 Heightmap(vec2 p) {
+    // FBM terrain
+    vec3 n = FractalNoise(p, HEIGHT_TILES, HEIGHT_OCTAVES, HEIGHT_LACUNARITY, HEIGHT_GAIN)
+		* HEIGHT_AMP;
+    
+    // [-1, 1] -> [0, 1]
+    n = n * 0.5 + vec3(0.5, 0, 0);
+
+    float strength = EROSION_STRENGTH;
+
+    // Smooth valleys
+    //strength *= smoothstep(0.0, 1.0, n.x);
+
+    strength *= smoothstep(WATER_HEIGHT - 0.1, WATER_HEIGHT + 0.1, n.x);
+    
+    int octaves = EROSION_OCTAVES;
+    
+#ifdef COMPARISON_SLIDER
+    if (iMouse.z > 0.5 && (iMouse.x / iResolution.x - 0.5) * 1.5 < (0.5 - p.y) || iMouse.z < 0.5 && 1.0 - p.y > (-cos(iTime) * 1.0 + 0.5)) {
+        octaves = 0;
+    }
+#endif
+
+    // Store erosion in h:
+    vec3 h = Erosion(p, n, EROSION_SCALE, strength,
+        EROSION_SLOPE_POWER, EROSION_CELL_SCALE,
+        octaves, EROSION_GAIN, EROSION_LACUNARITY);
+    
+    // Calculate the offset which satisfies the EROSION_HEIGHT_OFFSET parameter.
+    float erosionMagnitude = EROSION_SCALE * strength
+        * MagnitudeSum(octaves, EROSION_GAIN);
+    float offset = erosionMagnitude * EROSION_HEIGHT_OFFSET;
+
+    return vec2(n.x + h.x + offset, h.x / erosionMagnitude);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    if (fragCoord.x >= BUFFER_SIZE.x || fragCoord.y >= BUFFER_SIZE.y) {
+        return;
+    }
+
+    vec2 uv = fragCoord / BUFFER_SIZE;
+    uv.x += TIME_SCROLL_OFFSET;
+    
+    vec2 h = Heightmap(uv);
+    
+    // Calculate an accurate normal from neighbouring points
+    vec2 uv1 = uv + vec2(1.0, 0.0) / 512.0;
+    vec2 uv2 = uv + vec2(0.0, 1.0) / 512.0;
+    vec2 h1 = Heightmap(uv1);
+    vec2 h2 = Heightmap(uv2);
+    vec3 v1 = vec3(uv1 - uv, (h1.x - h.x));
+    vec3 v2 = vec3(uv2 - uv, (h2.x - h.x));
+    vec3 normal = normalize(cross(v1, v2)).xzy;
+    
+    fragColor = vec4(h.x, normal.xz, h.y);
+}
