@@ -4,6 +4,7 @@
 #include "../../generators/graph/image_utility.h"
 #include "../../generators/graph/node_type_db.h"
 #include "../../generators/graph/voxel_generator_graph.h"
+#include "../../generators/graph/voxel_graph_script_node.h"
 #include "../../storage/mixel4.h"
 #include "../../storage/voxel_buffer.h"
 #include "../../util/containers/container_funcs.h"
@@ -2697,6 +2698,120 @@ void test_voxel_graph_get_io_indices() {
 		ZN_TEST_ASSERT(output0_index == 0);
 		ZN_TEST_ASSERT(output1_index == 1);
 	}
+}
+
+namespace {
+
+Ref<VoxelGraphScriptNode> load_test_script_graph_node() {
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	const bool loaded = script_node->reload_script_contract("res://tests/sgn_test_node.gd");
+	ZN_TEST_ASSERT(loaded);
+	ZN_TEST_ASSERT(script_node->validate());
+	return script_node;
+}
+
+} // namespace
+
+void test_voxel_graph_script_node_contract() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	ZN_TEST_ASSERT(script_node->is_valid());
+	ZN_TEST_ASSERT(script_node->is_gpu_compatible());
+	ZN_TEST_ASSERT(script_node->get_validation_errors().size() == 0);
+	ZN_TEST_ASSERT(script_node->get_validation_warnings().size() == 0);
+
+	Span<const Ref<VoxelGraphScriptNodePort>> inputs = script_node->get_input_ports();
+	Span<const Ref<VoxelGraphScriptNodePort>> outputs = script_node->get_output_ports();
+	Span<const Ref<VoxelGraphScriptNodeParameter>> parameters = script_node->get_parameter_definitions();
+	ZN_TEST_ASSERT(inputs.size() == 2);
+	ZN_TEST_ASSERT(outputs.size() == 1);
+	ZN_TEST_ASSERT(parameters.size() == 1);
+	ZN_TEST_ASSERT(inputs[0]->get_port_name() == "x");
+	ZN_TEST_ASSERT(inputs[1]->get_port_name() == "bias");
+	ZN_TEST_ASSERT(outputs[0]->get_port_name() == "sdf");
+	ZN_TEST_ASSERT(parameters[0]->get_parameter_name() == "gain");
+
+	script_node->set_parameter_value("gain", 3.f);
+	ZN_TEST_ASSERT(script_node->get_parameter_value("gain").operator float() == 3.f);
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_sgn, 0, script_node);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 4.f);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	VoxelGraphFunction::ShaderResult shader_result = g.get_shader_source();
+	ZN_TEST_ASSERT(shader_result.compilation.success);
+	const StdString &code = shader_result.code_utf8;
+	ZN_TEST_ASSERT(code.find("void sgn_test_node_sgn_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find("const float sgn_test_node_sgn_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find(" = 3") != StdString::npos);
+}
+
+void test_voxel_graph_script_node_cpu_execution() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	script_node->set_parameter_value("gain", 2.5f);
+
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	g.clear();
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_sgn, 0, script_node);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 1.5f);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	pg::CompilationResult result = generator->compile(false);
+	ZN_TEST_ASSERT(result.success);
+	ZN_TEST_ASSERT(
+			Math::is_equal_approx(generator->generate_single(Vector3i(4, 0, 0), VoxelBuffer::CHANNEL_SDF).f, 11.5f)
+	);
+	ZN_TEST_ASSERT(
+			Math::is_equal_approx(generator->generate_single(Vector3i(-2, 0, 0), VoxelBuffer::CHANNEL_SDF).f, -3.5f)
+	);
+}
+
+void test_voxel_graph_script_node_port_refresh() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_sgn, 0, script_node);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 7.f);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	script_node->clear_inputs();
+	script_node->add_input("bias");
+	script_node->add_input("x");
+	g.refresh_script_graph_node(n_sgn);
+
+	ZN_TEST_ASSERT(g.get_node_input_count(n_sgn) == 2);
+	ZN_TEST_ASSERT(g.get_node_input_index(n_sgn, "bias") == 0);
+	ZN_TEST_ASSERT(g.get_node_input_index(n_sgn, "x") == 1);
+	ZN_TEST_ASSERT(g.get_node_output_index(n_sgn, "sdf") == 0);
+
+	ProgramGraph::PortLocation src;
+	ZN_TEST_ASSERT(g.try_get_connection_to({ n_sgn, 1 }, src));
+	ZN_TEST_ASSERT(src.node_id == n_x);
+	ZN_TEST_ASSERT(src.port_index == 0);
+	ZN_TEST_ASSERT(!g.try_get_connection_to({ n_sgn, 0 }, src));
+	ZN_TEST_ASSERT(g.try_get_connection_to({ n_out, 0 }, src));
+	ZN_TEST_ASSERT(src.node_id == n_sgn);
+	ZN_TEST_ASSERT(src.port_index == 0);
 }
 
 } // namespace zylann::voxel::tests

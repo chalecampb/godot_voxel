@@ -179,6 +179,9 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_voxel_graph_broad_block);
 	VOXEL_TEST(test_voxel_graph_set_default_input_by_name);
 	VOXEL_TEST(test_voxel_graph_get_io_indices);
+	VOXEL_TEST(test_voxel_graph_script_node_contract);
+	VOXEL_TEST(test_voxel_graph_script_node_cpu_execution);
+	VOXEL_TEST(test_voxel_graph_script_node_port_refresh);
 
 	print_line("------------ Voxel tests end -------------");
 }
