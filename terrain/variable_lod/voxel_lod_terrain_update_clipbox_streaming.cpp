@@ -1054,11 +1054,13 @@ void unview_mesh_box(
 				// individually, it doesn't exploit the shape of the loaded area at all (which is partly what makes
 				// it slower)
 				if (mesh_block.state == VoxelLodTerrainUpdateData::MESH_NEED_UPDATE) {
+					TaskCancellationToken cancellation_token = TaskCancellationToken::create();
 					mesh_block.state = VoxelLodTerrainUpdateData::MESH_UPDATE_NOT_SENT;
 					mesh_block.update_list_index = parent_lod.mesh_blocks_pending_update.size();
+					mesh_block.cancellation_token = cancellation_token;
 					parent_lod.mesh_blocks_pending_update.push_back(
 							VoxelLodTerrainUpdateData::MeshToUpdate{
-									bpos, TaskCancellationToken(), mesh_block.mesh_viewers.get() > 0 }
+									bpos, cancellation_token, mesh_block.mesh_viewers.get() > 0 }
 					);
 				}
 			}

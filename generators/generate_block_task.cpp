@@ -216,6 +216,13 @@ void GenerateBlockTask::apply_result() {
 		// The request response must match the dependency it would have been requested with.
 		// If it doesn't match, we are no longer interested in the result.
 		if (_stream_dependency->valid) {
+			if (_cancellation_token.is_valid() && _cancellation_token.is_cancelled()) {
+				if (_tracker != nullptr) {
+					_tracker->abort();
+				}
+				return;
+			}
+
 			Ref<VoxelStream> stream = _stream_dependency->stream;
 
 			VoxelEngine::BlockDataOutput o;

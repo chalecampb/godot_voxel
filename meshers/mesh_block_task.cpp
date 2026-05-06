@@ -322,6 +322,9 @@ void MeshBlockTask::run(zylann::ThreadedTaskContext &ctx) {
 	ZN_DSTACK();
 	ZN_PROFILE_SCOPE();
 	ZN_ASSERT(meshing_dependency != nullptr);
+	if (!meshing_dependency->valid) {
+		return;
+	}
 #ifdef DEBUG_ENABLED
 	ZN_ASSERT_RETURN_MSG(
 			meshing_dependency->mesher.is_valid(),
@@ -637,6 +640,10 @@ void MeshBlockTask::apply_result() {
 		// It is assumed that if a dependency is changed, a new copy of it is made and the old one is marked
 		// invalid.
 		if (meshing_dependency->valid) {
+			if (cancellation_token.is_valid() && cancellation_token.is_cancelled()) {
+				return;
+			}
+
 			VoxelEngine::BlockMeshOutput o;
 			// TODO Check for invalidation due to property changes
 

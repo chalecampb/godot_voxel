@@ -161,6 +161,10 @@ void LoadBlockDataTask::apply_result() {
 		// The request response must match the dependency it would have been requested with.
 		// If it doesn't match, we are no longer interested in the result.
 		if (_stream_dependency->valid && !_requested_generator_task) {
+			if (_cancellation_token.is_valid() && _cancellation_token.is_cancelled()) {
+				return;
+			}
+
 			VoxelEngine::BlockDataOutput o;
 			o.voxels = _voxels;
 #ifdef VOXEL_ENABLE_INSTANCER

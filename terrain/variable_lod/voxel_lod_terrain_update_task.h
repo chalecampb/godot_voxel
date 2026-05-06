@@ -74,10 +74,12 @@ public:
 		if (block.state != VoxelLodTerrainUpdateData::MESH_UPDATE_NOT_SENT) {
 			if (block.visual_active || block.collision_active) {
 				// Schedule an update
+				TaskCancellationToken cancellation_token = TaskCancellationToken::create();
 				block.state = VoxelLodTerrainUpdateData::MESH_UPDATE_NOT_SENT;
 				block.update_list_index = blocks_pending_update.size();
+				block.cancellation_token = cancellation_token;
 				blocks_pending_update.push_back(
-						VoxelLodTerrainUpdateData::MeshToUpdate{ bpos, TaskCancellationToken(), require_visual }
+						VoxelLodTerrainUpdateData::MeshToUpdate{ bpos, cancellation_token, require_visual }
 				);
 			} else {
 				// Just mark it as needing update, so the visibility system will schedule its update when needed.

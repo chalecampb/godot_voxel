@@ -763,6 +763,10 @@ void VoxelLodTerrain::start_streamer() {
 void VoxelLodTerrain::stop_streamer() {
 	_update_data->wait_for_end_of_task();
 
+	// Invalidate pending stream/generator tasks before clearing loading state. Otherwise, responses from the previous
+	// stream generation can come back after a restart and look like unexpected blocks.
+	StreamingDependency::reset(_streaming_dependency, get_stream(), get_generator());
+
 	for (unsigned int i = 0; i < _update_data->state.lods.size(); ++i) {
 		VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[i];
 		lod.loading_blocks.clear();
