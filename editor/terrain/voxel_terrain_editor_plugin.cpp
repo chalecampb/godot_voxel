@@ -1,6 +1,7 @@
 #include "voxel_terrain_editor_plugin.h"
 #include "../../constants/voxel_string_names.h"
 #include "../../engine/voxel_engine_gd.h"
+#include "../../generators/graph/voxel_generator_graph.h"
 #include "../../generators/voxel_generator.h"
 #include "../../terrain/fixed_lod/voxel_terrain.h"
 #include "../../terrain/variable_lod/voxel_lod_terrain.h"
@@ -59,6 +60,39 @@ void VoxelTerrainEditorPlugin::init() {
 }
 
 namespace {
+bool is_gpu_generation_enabled(VoxelNode &node) {
+#ifdef VOXEL_ENABLE_GPU
+	const VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(&node);
+	if (terrain != nullptr) {
+		return terrain->get_generator_use_gpu();
+	}
+	const VoxelLodTerrain *lod_terrain = Object::cast_to<VoxelLodTerrain>(&node);
+	if (lod_terrain != nullptr) {
+		return lod_terrain->get_generator_use_gpu();
+	}
+#endif
+	return false;
+}
+
+bool prepare_generator_for_editor_regeneration(VoxelNode &node) {
+	Ref<VoxelGeneratorGraph> graph_generator = node.get_generator();
+	if (graph_generator.is_null()) {
+		return true;
+	}
+
+	const pg::CompilationResult result = graph_generator->compile(true);
+	if (!result.success) {
+		ERR_PRINT(String("Graph compilation failed before terrain regeneration: {0}").format(varray(result.message)));
+		return false;
+	}
+#ifdef VOXEL_ENABLE_GPU
+	if (is_gpu_generation_enabled(node)) {
+		graph_generator->compile_shaders();
+	}
+#endif
+	return true;
+}
+
 void add_checkable_item(PopupMenu *popup, String text, int id, bool checked) {
 	popup->add_item(text, id);
 	const int i = popup->get_item_index(id);
@@ -197,7 +231,9 @@ void VoxelTerrainEditorPlugin::_on_menu_item_selected(int id) {
 		case MENU_RESTART_STREAM: {
 			VoxelNode *node = _terrain_node.get();
 			ERR_FAIL_COND(node == nullptr);
-			node->restart_stream();
+			if (prepare_generator_for_editor_regeneration(*node)) {
+				node->restart_stream();
+			}
 		} break;
 
 		case MENU_REMESH: {
