@@ -5,6 +5,7 @@
 #include "../../util/godot/classes/control.h"
 #include "../../util/godot/classes/editor_undo_redo_manager.h"
 #include "../../util/godot/classes/graph_edit_connection.h"
+#include "../../util/godot/core/packed_string_array.h"
 #include "../../util/godot/debug_renderer.h"
 #include "../../util/godot/object_weak_ref.h"
 #include "../../util/math/vector2f.h"
@@ -57,6 +58,7 @@ public:
 	// To be called when the number of inputs in a node changes.
 	// Rebuilds the node's internal controls, and updates GUI connections going to it from the graph.
 	void update_node_layout(uint32_t node_id);
+	void refresh_script_graph_nodes_from_paths(PackedStringArray paths);
 
 	void update_node_comment(uint32_t node_id);
 
@@ -155,6 +157,7 @@ private:
 	EditorUndoRedoManager *_undo_redo = nullptr;
 	Vector2 _click_position;
 	bool _nothing_selected_check_scheduled = false;
+	bool _updating_previews = false;
 	float _time_before_preview_update = 0.f;
 	zylann::godot::ObjectWeakRef<VoxelNode> _terrain_node;
 	zylann::godot::DebugRenderer _debug_renderer;

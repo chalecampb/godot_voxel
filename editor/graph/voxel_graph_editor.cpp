@@ -1,6 +1,7 @@
 #include "voxel_graph_editor.h"
 #include "../../constants/voxel_string_names.h"
 #include "../../generators/graph/node_type_db.h"
+#include "../../generators/graph/voxel_graph_script_node.h"
 #include "../../generators/graph/voxel_generator_graph.h"
 #include "../../terrain/voxel_node.h"
 #include "../../util/containers/std_vector.h"
@@ -507,10 +508,14 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 
 	GraphEdit &graph_edit = *_graph_edit;
 	const String view_name = node_to_gui_name(node_id);
+	if (!graph_edit.has_node(view_name)) {
+		// Graph changes can be emitted while the GraphEdit is being rebuilt or after it was cleared.
+		return;
+	}
 	VoxelGraphEditorNode *view = get_node_typed<VoxelGraphEditorNode>(graph_edit, view_name);
 	ERR_FAIL_COND(view == nullptr);
 
-	// Remove all GUI connections going to the node
+	// Remove all GUI connections going to or from the node
 
 	StdVector<GraphEditConnection> old_connections;
 	get_graph_edit_connections(graph_edit, old_connections);
@@ -521,17 +526,20 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 		if (to_view == nullptr) {
 			continue;
 		}
-		if (to_view == view) {
+		const NodePath from = to_node_path(con.from);
+		const VoxelGraphEditorNode *from_view = get_node_typed<VoxelGraphEditorNode>(graph_edit, from);
+		if (to_view == view || from_view == view) {
 			graph_edit.disconnect_node(con.from, con.from_port, con.to, con.to_port);
 		}
 	}
 
 	// Update node layout
 
+	view->update_title(**_graph);
 	view->update_layout(**_graph);
-
-	// TODO What about output connections?
-	// Currently assuming there is always only one for expression nodes, therefore it might be ok?
+	if (_graph->get_node_type_id(node_id) == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+		view->set_size(view->get_combined_minimum_size());
+	}
 
 	// Add connections back by reading the graph
 
@@ -542,7 +550,7 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 	for (size_t i = 0; i < all_connections.size(); ++i) {
 		const ProgramGraph::Connection &con = all_connections[i];
 
-		if (con.dst.node_id == node_id) {
+		if (con.dst.node_id == node_id || con.src.node_id == node_id) {
 			graph_edit.connect_node(
 					node_to_gui_name(con.src.node_id),
 					con.src.port_index,
@@ -1049,6 +1057,14 @@ void reset_modulates(GraphEdit &graph_edit) {
 
 void VoxelGraphEditor::update_previews(bool with_live_update) {
 	ZN_ASSERT_RETURN(_graph.is_valid());
+	ERR_FAIL_COND(_updating_previews);
+	_updating_previews = true;
+	struct PreviewUpdateScope {
+		bool &updating_previews;
+		~PreviewUpdateScope() {
+			updating_previews = false;
+		}
+	} preview_update_scope{ _updating_previews };
 
 	clear_range_analysis_tooltips();
 	hide_profiling_ratios();
@@ -1249,7 +1265,69 @@ void VoxelGraphEditor::schedule_preview_update() {
 }
 
 void VoxelGraphEditor::_on_graph_changed() {
+	if (_updating_previews) {
+		return;
+	}
 	schedule_preview_update();
+	if (_graph.is_valid() && _graph_edit != nullptr) {
+		PackedInt32Array node_ids = _graph->get_node_ids();
+		for (int i = 0; i < node_ids.size(); ++i) {
+			const uint32_t node_id = node_ids[i];
+			if (_graph->get_node_type_id(node_id) == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+				update_node_layout(node_id);
+			}
+		}
+	}
+}
+
+void VoxelGraphEditor::refresh_script_graph_nodes_from_paths(PackedStringArray paths) {
+	if (_graph.is_null()) {
+		return;
+	}
+
+	PackedInt32Array node_ids = _graph->get_node_ids();
+	for (int node_index = 0; node_index < node_ids.size(); ++node_index) {
+		const uint32_t node_id = node_ids[node_index];
+		if (_graph->get_node_type_id(node_id) != VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			continue;
+		}
+
+		Ref<VoxelGraphScriptNode> custom_node = _graph->get_node_param(node_id, 0);
+		if (custom_node.is_null()) {
+			continue;
+		}
+
+		if (custom_node->get_script_path().is_empty() && custom_node->get_shader_path().is_empty()) {
+			continue;
+		}
+
+		const String script_path = custom_node->get_script_path();
+		const String shader_path = custom_node->get_shader_path();
+		bool path_matches = paths.size() == 0;
+		bool script_path_matches = paths.size() == 0;
+		bool shader_path_matches = paths.size() == 0;
+		for (int path_index = 0; path_index < paths.size(); ++path_index) {
+			if (paths[path_index] == script_path) {
+				path_matches = true;
+				script_path_matches = true;
+			}
+			if (!shader_path.is_empty() && paths[path_index] == shader_path) {
+				path_matches = true;
+				shader_path_matches = true;
+			}
+		}
+		if (!path_matches) {
+			continue;
+		}
+
+		if (script_path_matches) {
+			custom_node->reload_attached_script();
+		} else if (shader_path_matches) {
+			custom_node->refresh_metadata();
+		}
+		_graph->refresh_script_graph_node(node_id);
+		update_node_layout(node_id);
+	}
 }
 
 void VoxelGraphEditor::_on_graph_node_name_changed(int node_id) {

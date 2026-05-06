@@ -10,6 +10,7 @@
 #include "edition/voxel_tool_terrain.h"
 #include "engine/voxel_engine_gd.h"
 #include "generators/graph/node_type_db.h"
+#include "generators/graph/voxel_graph_script_node.h"
 #include "generators/graph/voxel_generator_graph.h"
 #include "generators/multipass/voxel_generator_multipass_cb.h"
 #include "generators/voxel_generator_script.h"
@@ -277,6 +278,9 @@ void initialize_voxel_module(ModuleInitializationLevel p_level) {
 		ClassDB::register_class<VoxelDataBlockEnterInfo>();
 		ClassDB::register_class<VoxelSaveCompletionTracker>();
 		ClassDB::register_class<pg::VoxelGraphFunction>();
+		ClassDB::register_class<pg::VoxelGraphScriptNodePort>();
+		ClassDB::register_class<pg::VoxelGraphScriptNodeParameter>();
+		ClassDB::register_class<pg::VoxelGraphScriptNode>();
 
 		// Storage
 		ClassDB::register_class<zylann::voxel::godot::VoxelBuffer>();

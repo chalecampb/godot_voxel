@@ -35,14 +35,18 @@ void Runtime::clear() {
 namespace {
 
 Span<const uint16_t> get_outputs_from_op_address(Span<const uint16_t> operations, uint16_t op_address) {
-	const uint16_t opid = operations[op_address];
+	uint32_t pc = op_address;
+	const uint16_t opid = operations[pc++];
 	const NodeType &node_type = NodeTypeDB::get_singleton().get_type(opid);
 
-	const uint32_t inputs_count = node_type.inputs.size();
-	const uint32_t outputs_count = node_type.outputs.size();
+	uint32_t inputs_count = node_type.inputs.size();
+	uint32_t outputs_count = node_type.outputs.size();
+	if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+		inputs_count = operations[pc++];
+		outputs_count = operations[pc++];
+	}
 
-	// The +1 is for `opid`
-	return operations.sub(op_address + 1 + inputs_count, outputs_count);
+	return operations.sub(pc + inputs_count, outputs_count);
 }
 
 } // namespace
@@ -488,8 +492,12 @@ void Runtime::generate_set(
 		const uint16_t opid = operations[pc++];
 		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(opid);
 
-		const uint32_t inputs_count = node_type.inputs.size();
-		const uint32_t outputs_count = node_type.outputs.size();
+		uint32_t inputs_count = node_type.inputs.size();
+		uint32_t outputs_count = node_type.outputs.size();
+		if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			inputs_count = operations[pc++];
+			outputs_count = operations[pc++];
+		}
 
 		const Span<const uint16_t> op_inputs = operations.sub(pc, inputs_count);
 		pc += inputs_count;
@@ -551,8 +559,12 @@ void Runtime::analyze_range(State &state, Span<const math::Interval> p_inputs) c
 		const uint16_t opid = operations[pc++];
 		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(opid);
 
-		const uint32_t inputs_count = node_type.inputs.size();
-		const uint32_t outputs_count = node_type.outputs.size();
+		uint32_t inputs_count = node_type.inputs.size();
+		uint32_t outputs_count = node_type.outputs.size();
+		if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			inputs_count = operations[pc++];
+			outputs_count = operations[pc++];
+		}
 
 		const Span<const uint16_t> op_inputs = operations.sub(pc, inputs_count);
 		pc += inputs_count;
@@ -584,8 +596,12 @@ void Runtime::debug_print_operations() {
 		const uint16_t opid = operations[pc++];
 		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(opid);
 
-		const uint32_t inputs_count = node_type.inputs.size();
-		const uint32_t outputs_count = node_type.outputs.size();
+		uint32_t inputs_count = node_type.inputs.size();
+		uint32_t outputs_count = node_type.outputs.size();
+		if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			inputs_count = operations[pc++];
+			outputs_count = operations[pc++];
+		}
 
 		const Span<const uint16_t> inputs = operations.sub(pc, inputs_count);
 		pc += inputs_count;

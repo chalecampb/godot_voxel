@@ -98,6 +98,7 @@ public:
 		NODE_RELAY,
 		NODE_SPOTS_2D,
 		NODE_SPOTS_3D,
+		NODE_SCRIPT_GRAPH,
 
 	// Optional features down (to avoid diffs in docs when building both versions)
 	// Keep in mind this enum's values should not be used in persistent context (saves)
@@ -220,6 +221,7 @@ public:
 
 #ifdef TOOLS_ENABLED
 	void get_configuration_warnings(PackedStringArray &out_warnings) const;
+	void _validate_property(PropertyInfo &p_property) const;
 
 	// Gets a hash that attempts to only change if the output of the graph is different.
 	// This is computed from the editable graph data, not the compiled result.
@@ -273,6 +275,9 @@ public:
 	bool get_node_param_index_by_name(uint32_t node_id, String param_name, unsigned int &out_param_index) const;
 
 	void update_function_nodes(StdVector<ProgramGraph::Connection> *removed_connections);
+	void update_script_graph_nodes(StdVector<ProgramGraph::Connection> *removed_connections);
+	void refresh_script_graph_node(uint32_t node_id);
+	void refresh_script_graph_nodes();
 
 	// Copies nodes into another graph, and connections between them only.
 	// Resources in node parameters will be duplicated if they don't have a file path.

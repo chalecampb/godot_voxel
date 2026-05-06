@@ -2452,6 +2452,12 @@ void VoxelGeneratorGraph::get_configuration_warnings(PackedStringArray &out_warn
 	}
 }
 
+void VoxelGeneratorGraph::_validate_property(PropertyInfo &p_property) const {
+	if (p_property.name == StringName("script")) {
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
+	}
+}
+
 #endif // TOOLS_ENABLED
 
 float VoxelGeneratorGraph::_b_generate_single(Vector3 pos) {

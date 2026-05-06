@@ -1,10 +1,12 @@
 #include "voxel_graph_editor_node.h"
 #include "../../generators/graph/node_type_db.h"
 #include "../../generators/graph/voxel_generator_graph.h"
+#include "../../generators/graph/voxel_graph_script_node.h"
 #include "../../util/godot/classes/h_box_container.h"
 #include "../../util/godot/classes/label.h"
 #include "../../util/godot/classes/node.h"
 #include "../../util/godot/classes/style_box_empty.h"
+#include "../../util/godot/classes/v_box_container.h"
 #include "../../util/godot/core/array.h"
 #include "../../util/godot/core/string_name.h"
 #include "../../util/godot/core/version.h"
@@ -18,6 +20,26 @@ namespace zylann::voxel {
 using namespace pg;
 
 static const Color PORT_COLOR(0.4, 0.4, 1.0);
+static const char *SCRIPT_TITLE_CONTAINER_NAME = "_script_title_container";
+static const char *SCRIPT_SUBTITLE_LABEL_NAME = "_script_subtitle";
+
+Label *find_graph_node_title_label(Node *node) {
+	for (int i = 0; i < node->get_child_count(); ++i) {
+		Node *child = node->get_child(i);
+		if (String(child->get_name()) == SCRIPT_SUBTITLE_LABEL_NAME) {
+			continue;
+		}
+		Label *label = Object::cast_to<Label>(child);
+		if (label != nullptr) {
+			return label;
+		}
+		Label *descendant_label = find_graph_node_title_label(child);
+		if (descendant_label != nullptr) {
+			return descendant_label;
+		}
+	}
+	return nullptr;
+}
 
 VoxelGraphEditorNode *VoxelGraphEditorNode::create(const VoxelGraphFunction &graph, uint32_t node_id) {
 	VoxelGraphEditorNode *node_view = memnew(VoxelGraphEditorNode);
@@ -36,6 +58,7 @@ VoxelGraphEditorNode *VoxelGraphEditorNode::create(const VoxelGraphFunction &gra
 #endif
 
 	node_view->update_title(graph, node_id);
+	node_view->update_script_subtitle(graph, node_id);
 
 	node_view->_node_id = node_id;
 
@@ -214,6 +237,7 @@ void VoxelGraphEditorNode::update_comment_text(const VoxelGraphFunction &graph) 
 
 void VoxelGraphEditorNode::update_title(const VoxelGraphFunction &graph) {
 	update_title(graph, _node_id);
+	update_script_subtitle(graph, _node_id);
 }
 
 void VoxelGraphEditorNode::update_title(const VoxelGraphFunction &graph, uint32_t node_id) {
@@ -245,6 +269,63 @@ void VoxelGraphEditorNode::update_title(const VoxelGraphFunction &graph, uint32_
 	} else {
 		set_title(String("{0} ({1})").format(varray(node_name, type.name)));
 	}
+}
+
+void VoxelGraphEditorNode::update_script_subtitle(const VoxelGraphFunction &graph, uint32_t node_id) {
+	if (graph.get_node_type_id(node_id) != VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+		if (_script_subtitle_label != nullptr) {
+			_script_subtitle_label->queue_free();
+			_script_subtitle_label = nullptr;
+		}
+		return;
+	}
+
+	Node *titlebar = get_titlebar_hbox();
+	ERR_FAIL_COND(titlebar == nullptr);
+
+	if (_script_subtitle_label == nullptr) {
+		Label *existing_label = Object::cast_to<Label>(titlebar->find_child(SCRIPT_SUBTITLE_LABEL_NAME, true, false));
+		if (existing_label != nullptr) {
+			_script_subtitle_label = existing_label;
+		} else {
+			VBoxContainer *title_container =
+					Object::cast_to<VBoxContainer>(titlebar->find_child(SCRIPT_TITLE_CONTAINER_NAME, true, false));
+			if (title_container == nullptr) {
+				title_container = memnew(VBoxContainer);
+				title_container->set_name(SCRIPT_TITLE_CONTAINER_NAME);
+				title_container->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
+
+				Label *title_label = find_graph_node_title_label(titlebar);
+				if (title_label != nullptr) {
+					Node *title_label_parent = title_label->get_parent();
+					const int title_label_index = title_label->get_index();
+					title_container->set_h_size_flags(title_label->get_h_size_flags());
+					title_label_parent->remove_child(title_label);
+					title_label_parent->add_child(title_container);
+					title_label_parent->move_child(title_container, title_label_index);
+					title_container->add_child(title_label);
+				} else {
+					titlebar->add_child(title_container);
+				}
+			}
+
+			_script_subtitle_label = memnew(Label);
+			_script_subtitle_label->set_name(SCRIPT_SUBTITLE_LABEL_NAME);
+			_script_subtitle_label->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
+			_script_subtitle_label->set_modulate(Color(1.f, 1.f, 1.f, 0.65f));
+			_script_subtitle_label->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+			_script_subtitle_label->add_theme_font_size_override("font_size", int(12.f * EDSCALE));
+			title_container->add_child(_script_subtitle_label);
+		}
+	}
+
+	Ref<VoxelGraphScriptNode> custom_node = graph.get_node_param(node_id, 0);
+	String subtitle;
+	if (custom_node.is_valid()) {
+		subtitle = custom_node->get_script_path().get_file().get_basename();
+	}
+	_script_subtitle_label->set_visible(!subtitle.is_empty());
+	_script_subtitle_label->set_text(subtitle);
 }
 
 void VoxelGraphEditorNode::poll(const VoxelGraphFunction &graph) {

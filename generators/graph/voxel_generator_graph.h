@@ -156,6 +156,7 @@ public:
 
 #ifdef TOOLS_ENABLED
 	void get_configuration_warnings(PackedStringArray &out_warnings) const override;
+	void _validate_property(PropertyInfo &p_property) const;
 #endif
 
 private:

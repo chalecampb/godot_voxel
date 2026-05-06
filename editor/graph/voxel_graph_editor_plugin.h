@@ -4,6 +4,7 @@
 #include "../../generators/graph/voxel_graph_function.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/classes/editor_plugin.h"
+#include "../../util/godot/core/packed_string_array.h"
 #include "../../util/godot/object_weak_ref.h"
 #include "../../util/macros.h"
 #include "voxel_graph_node_inspector_wrapper.h"
@@ -45,6 +46,10 @@ private:
 	void _on_graph_editor_popout_requested();
 	void _on_graph_editor_window_close_requested();
 	void _on_generator_changed();
+	void _on_resources_reload(PackedStringArray paths);
+	void _on_sources_changed(bool exists);
+	void _refresh_script_graph_nodes_after_reload_deferred(PackedStringArray paths);
+	void _refresh_script_graph_nodes_deferred(PackedStringArray paths);
 	void _hide_deferred();
 
 	static void _bind_methods();
