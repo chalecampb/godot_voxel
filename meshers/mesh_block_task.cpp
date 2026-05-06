@@ -380,6 +380,10 @@ void MeshBlockTask::gather_voxels_gpu(zylann::ThreadedTaskContext &ctx) {
 	Ref<VoxelMesher> mesher = meshing_dependency->mesher;
 	const unsigned int min_padding = mesher->get_minimum_padding();
 	const unsigned int max_padding = mesher->get_maximum_padding();
+	Ref<VoxelGenerator> generator = meshing_dependency->generator;
+	if (generator.is_null()) {
+		generator = data->get_generator();
+	}
 
 	StdVector<Box3i> boxes_to_generate;
 	Vector3i origin_in_voxels;
@@ -390,7 +394,7 @@ void MeshBlockTask::gather_voxels_gpu(zylann::ThreadedTaskContext &ctx) {
 			min_padding,
 			max_padding,
 			mesher->get_used_channels_mask(),
-			meshing_dependency->generator,
+			generator,
 			*data,
 			lod_index,
 			mesh_block_position,
@@ -403,7 +407,6 @@ void MeshBlockTask::gather_voxels_gpu(zylann::ThreadedTaskContext &ctx) {
 		return;
 	}
 
-	Ref<VoxelGenerator> generator = meshing_dependency->generator;
 	ERR_FAIL_COND(generator.is_null());
 
 	VoxelGenerator::VoxelQueryData generator_query{ _voxels, origin_in_voxels, lod_index };
@@ -456,6 +459,10 @@ void MeshBlockTask::gather_voxels_cpu() {
 	Ref<VoxelMesher> mesher = meshing_dependency->mesher;
 	const unsigned int min_padding = mesher->get_minimum_padding();
 	const unsigned int max_padding = mesher->get_maximum_padding();
+	Ref<VoxelGenerator> generator = meshing_dependency->generator;
+	if (generator.is_null()) {
+		generator = data->get_generator();
+	}
 
 	copy_block_and_neighbors(
 			to_span(blocks, blocks_count),
@@ -463,7 +470,7 @@ void MeshBlockTask::gather_voxels_cpu() {
 			min_padding,
 			max_padding,
 			mesher->get_used_channels_mask(),
-			meshing_dependency->generator,
+			generator,
 			*data,
 			lod_index,
 			mesh_block_position,
