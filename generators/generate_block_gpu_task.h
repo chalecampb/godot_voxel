@@ -46,6 +46,7 @@ class IGeneratingVoxelsThreadedTask : public IThreadedTask {
 public:
 	// Called when the GPU task is complete.
 	virtual void set_gpu_results(StdVector<GenerateBlockGPUTaskResult> &&results) = 0;
+	virtual void notify_gpu_generation_failed() = 0;
 };
 
 // Generates a block of voxels on the GPU. Must be scheduled from a threaded task, which will be resumed when this one
@@ -90,6 +91,7 @@ private:
 	RID _generator_pipeline_rid;
 	StdVector<RID> _modifier_pipelines;
 	StdVector<RID> _uniform_sets_to_free;
+	bool _prepared = false;
 };
 
 } // namespace zylann::voxel

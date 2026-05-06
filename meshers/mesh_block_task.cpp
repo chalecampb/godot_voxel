@@ -350,6 +350,9 @@ void MeshBlockTask::run(zylann::ThreadedTaskContext &ctx) {
 
 #ifdef VOXEL_ENABLE_GPU
 	if (block_generation_use_gpu) {
+		if (_gpu_generation_failed) {
+			return;
+		}
 		if (_stage == 0) {
 			gather_voxels_gpu(ctx);
 		}
@@ -438,6 +441,10 @@ void MeshBlockTask::gather_voxels_gpu(zylann::ThreadedTaskContext &ctx) {
 void MeshBlockTask::set_gpu_results(StdVector<GenerateBlockGPUTaskResult> &&results) {
 	_gpu_generation_results = std::move(results);
 	_stage = 1;
+}
+
+void MeshBlockTask::notify_gpu_generation_failed() {
+	_gpu_generation_failed = true;
 }
 
 #endif

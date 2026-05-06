@@ -42,6 +42,7 @@ public:
 
 #ifdef VOXEL_ENABLE_GPU
 	void set_gpu_results(StdVector<GenerateBlockGPUTaskResult> &&results) override;
+	void notify_gpu_generation_failed() override;
 #endif
 
 private:
@@ -63,6 +64,7 @@ private:
 	bool _drop_beyond_max_distance = true;
 #ifdef VOXEL_ENABLE_GPU
 	bool _use_gpu = false;
+	bool _gpu_generation_failed = false;
 #endif
 	PriorityDependency _priority_dependency;
 	std::shared_ptr<StreamingDependency> _stream_dependency; // For saving generator output

@@ -57,6 +57,9 @@ void GenerateBlockTask::run(zylann::ThreadedTaskContext &ctx) {
 
 #ifdef VOXEL_ENABLE_GPU
 	if (_use_gpu) {
+		if (_gpu_generation_failed) {
+			return;
+		}
 		if (_stage == 0) {
 			run_gpu_task(ctx);
 		}
@@ -125,6 +128,10 @@ void GenerateBlockTask::run_gpu_task(zylann::ThreadedTaskContext &ctx) {
 void GenerateBlockTask::set_gpu_results(StdVector<GenerateBlockGPUTaskResult> &&results) {
 	_gpu_generation_results = std::move(results);
 	_stage = 1;
+}
+
+void GenerateBlockTask::notify_gpu_generation_failed() {
+	_gpu_generation_failed = true;
 }
 
 void GenerateBlockTask::run_gpu_conversion() {

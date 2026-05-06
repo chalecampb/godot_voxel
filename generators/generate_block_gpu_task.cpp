@@ -6,6 +6,7 @@
 #include "../util/dstack.h"
 #include "../util/godot/classes/rendering_device.h"
 #include "../util/godot/core/packed_arrays.h"
+#include "../util/io/log.h"
 #include "../util/math/conv.h"
 #include "../util/profiling.h"
 #include "../util/string/format.h"
@@ -44,7 +45,10 @@ void GenerateBlockGPUTask::prepare(GPUTaskContext &ctx) {
 	ZN_DSTACK();
 
 	ZN_ASSERT_RETURN(generator_shader != nullptr);
-	ZN_ASSERT_RETURN(generator_shader->get_rid().is_valid());
+	if (!generator_shader->get_rid().is_valid()) {
+		ZN_PRINT_ERROR_ONCE("Cannot generate voxels on GPU because the generator shader is invalid.");
+		return;
+	}
 
 	ZN_ASSERT_RETURN(generator_shader_params != nullptr);
 	ZN_ASSERT_RETURN(generator_shader_outputs != nullptr);
@@ -239,6 +243,7 @@ void GenerateBlockGPUTask::prepare(GPUTaskContext &ctx) {
 #endif
 
 	rd.compute_list_end();
+	_prepared = true;
 }
 
 namespace {
@@ -435,6 +440,13 @@ void GenerateBlockGPUTask::collect(GPUTaskContext &ctx) {
 	ZN_PROFILE_SCOPE();
 	ZN_DSTACK();
 
+	if (!_prepared) {
+		consumer_task->notify_gpu_generation_failed();
+		VoxelEngine::get_singleton().push_async_task(consumer_task);
+		consumer_task = nullptr;
+		return;
+	}
+
 	RenderingDevice &rd = ctx.rendering_device;
 	GPUStorageBufferPool &storage_buffer_pool = ctx.storage_buffer_pool;
 
@@ -474,14 +486,20 @@ void GenerateBlockGPUTask::collect(GPUTaskContext &ctx) {
 		storage_buffer_pool.recycle(bd.params_sb);
 	}
 
-	zylann::godot::free_rendering_device_rid(rd, _generator_pipeline_rid);
+	if (_generator_pipeline_rid.is_valid()) {
+		zylann::godot::free_rendering_device_rid(rd, _generator_pipeline_rid);
+	}
 
 	for (const RID &rid : _modifier_pipelines) {
-		zylann::godot::free_rendering_device_rid(rd, rid);
+		if (rid.is_valid()) {
+			zylann::godot::free_rendering_device_rid(rd, rid);
+		}
 	}
 
 	for (const RID &rid : _uniform_sets_to_free) {
-		zylann::godot::free_rendering_device_rid(rd, rid);
+		if (rid.is_valid()) {
+			zylann::godot::free_rendering_device_rid(rd, rid);
+		}
 	}
 
 	// We leave conversion to the CPU task, because we have only one thread for GPU work and it only exists for waiting

@@ -46,6 +46,7 @@ public:
 
 #ifdef VOXEL_ENABLE_GPU
 	void set_gpu_results(StdVector<GenerateBlockGPUTaskResult> &&results) override;
+	void notify_gpu_generation_failed() override;
 #endif
 
 	static int debug_get_running_count();
@@ -92,6 +93,7 @@ private:
 	bool _has_mesh_resource = false;
 #ifdef VOXEL_ENABLE_GPU
 	uint8_t _stage = 0;
+	bool _gpu_generation_failed = false;
 #endif
 	VoxelBuffer _voxels;
 	VoxelMesher::Output _surfaces_output;
