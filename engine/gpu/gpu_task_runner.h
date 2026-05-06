@@ -80,6 +80,7 @@ public:
 	void push(IGPUTask *task);
 	unsigned int get_pending_task_count() const;
 	bool has_rendering_device() const;
+	bool was_rendering_device_creation_attempted() const;
 	bool is_running() const;
 
 private:
@@ -87,7 +88,8 @@ private:
 
 	RenderingDevice *_rendering_device = nullptr;
 	// mutable Mutex _rendering_device_ptr_mutex;
-	bool _has_rendering_device = false;
+	std::atomic_bool _has_rendering_device = false;
+	std::atomic_bool _rendering_device_creation_attempted = false;
 
 	GPUStorageBufferPool _storage_buffer_pool;
 	BaseGPUResources _base_resources;

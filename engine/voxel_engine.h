@@ -281,6 +281,10 @@ public:
 	bool has_rendering_device() const {
 		return _gpu_task_runner.has_rendering_device();
 	}
+
+	bool was_rendering_device_creation_attempted() const {
+		return _gpu_task_runner.was_rendering_device_creation_attempted();
+	}
 #endif
 
 	// RenderingDevice &get_rendering_device() const {

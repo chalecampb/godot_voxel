@@ -27,6 +27,8 @@ GPUTaskRunner::~GPUTaskRunner() {
 void GPUTaskRunner::start() {
 	ZN_ASSERT(!_running);
 	ZN_PRINT_VERBOSE("Starting GPUTaskRunner");
+	_has_rendering_device = false;
+	_rendering_device_creation_attempted = false;
 	_running = true;
 	_thread.start(
 			[](void *p_userdata) {
@@ -72,6 +74,10 @@ bool GPUTaskRunner::has_rendering_device() const {
 	return _has_rendering_device;
 }
 
+bool GPUTaskRunner::was_rendering_device_creation_attempted() const {
+	return _rendering_device_creation_attempted;
+}
+
 void GPUTaskRunner::thread_func() {
 	ZN_PROFILE_SET_THREAD_NAME("Voxel GPU tasks");
 	ZN_DSTACK();
@@ -84,6 +90,8 @@ void GPUTaskRunner::thread_func() {
 		// This in turn affects a lot of other design decisions regarding how we manage resources with it...
 		_rendering_device = RenderingServer::get_singleton()->create_local_rendering_device();
 	}
+
+	_rendering_device_creation_attempted = true;
 
 	if (_rendering_device == nullptr) {
 		ZN_PRINT_VERBOSE("Could not create local RenderingDevice, GPU functionality won't be supported.");
@@ -241,6 +249,7 @@ void GPUTaskRunner::thread_func() {
 		// MutexLock mlock(_rendering_device_ptr_mutex);
 		memdelete(_rendering_device);
 		_rendering_device = nullptr;
+		_has_rendering_device = false;
 	}
 }
 
