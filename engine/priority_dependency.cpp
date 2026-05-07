@@ -18,10 +18,11 @@ TaskPriority PriorityDependency::evaluate(uint8_t lod_index, uint8_t band2_prior
 	const Vector3f block_position = world_position;
 
 	float closest_distance_sq = 99999.f;
-	if (viewer_positions.size() == 0) {
+	if (viewer_count == 0) {
 		// Assume origin
 		closest_distance_sq = math::length_squared(block_position);
 	} else {
+		ZN_ASSERT_RETURN_V(viewer_count <= viewer_positions.size(), priority);
 		for (unsigned int i = 0; i < viewer_count; ++i) {
 			const float d = math::distance_squared(viewer_positions[i], block_position);
 			if (d < closest_distance_sq) {

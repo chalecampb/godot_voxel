@@ -20,7 +20,7 @@ struct PriorityDependency {
 		// viewers.
 		StdVector<Vector3f> viewers;
 		// Use this count instead of `viewers.size()`. Can change, but will always be <= `viewers.size()`
-		std::atomic_uint32_t viewers_count;
+		std::atomic_uint32_t viewers_count = { 0 };
 		float highest_view_distance = 999999;
 	};
 
