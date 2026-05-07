@@ -326,7 +326,7 @@ void VoxelEngine::process() {
 		const ThreadedTaskRunner::DebugStats task_stats = _general_thread_pool.get_and_reset_debug_stats();
 		if (pending_tasks > 0 || s_completed_threaded_tasks_since_log > 0 || task_stats.staged_sort_count > 0 ||
 				task_stats.merge_count > 0 || task_stats.priority_sort_count > 0) {
-			ZN_PRINT_VERBOSE(format(
+			print_line(format(
 					"Voxel tasks: completed={} pending={} generate={} mesh={} stream={} staged_sorts={}/{} {}us merges={}/{} {}us queue_sorts={}/{} {}us",
 					s_completed_threaded_tasks_since_log,
 					pending_tasks,

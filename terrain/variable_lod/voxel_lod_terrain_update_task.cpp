@@ -9,6 +9,7 @@
 #include "../../util/containers/container_funcs.h"
 #include "../../util/dstack.h"
 #include "../../util/godot/classes/engine.h"
+#include "../../util/godot/classes/time.h"
 #include "../../util/math/conv.h"
 #include "../../util/profiling.h"
 #include "../../util/profiling_clock.h"
@@ -1204,8 +1205,12 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 	state.stats.time_mesh_requests = profiling_clock.restart();
 
 	state.stats.time_total = profiling_clock.restart();
-	if (state.stats.time_total > 100000 || state.stats.data_load_requests > 10000 || state.stats.mesh_requests > 10000) {
-		ZN_PRINT_VERBOSE(format(
+	static uint64_t s_last_update_log_time_ms = 0;
+	const uint64_t now_ms = Time::get_singleton()->get_ticks_msec();
+	const bool has_activity = state.stats.data_load_requests > 0 || state.stats.mesh_requests > 0;
+	if (has_activity && (now_ms - s_last_update_log_time_ms > 1000 || state.stats.time_total > 100000 ||
+							  state.stats.data_load_requests > 10000 || state.stats.mesh_requests > 10000)) {
+		print_line(format(
 				"VLT update: total={}us detect={}us io={}us mesh_req={}us data_loads={} mesh_reqs={} mesh_flushes={}",
 				state.stats.time_total,
 				state.stats.time_detect_required_blocks,
@@ -1215,6 +1220,7 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 				state.stats.mesh_requests,
 				state.stats.mesh_request_flushes
 		));
+		s_last_update_log_time_ms = now_ms;
 	}
 }
 
