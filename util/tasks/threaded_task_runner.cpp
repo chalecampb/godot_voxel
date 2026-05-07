@@ -171,6 +171,7 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 
 	StdVector<TaskItem> tasks;
 	StdVector<TaskItem> postponed_tasks;
+	StdVector<TaskItem> staged_tasks;
 	StdVector<IThreadedTask *> cancelled_tasks;
 
 	while (!data.stop) {
@@ -197,21 +198,85 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 				}
 			}
 
+			staged_tasks.clear();
+			if (_staged_tasks_mutex.try_lock()) {
+				if (_staged_tasks.size() > 0) {
+					staged_tasks.swap(_staged_tasks);
+				}
+				_staged_tasks_mutex.unlock();
+			}
+
+			struct TaskComparator {
+				inline bool operator()(const TaskItem &a, const TaskItem &b) const {
+					// Tasks with highest priority come last (easier pop back)
+					return a.cached_priority < b.cached_priority;
+				}
+			};
+
+			if (staged_tasks.size() > 0) {
+				ZN_PROFILE_SCOPE_NAMED("Prioritize staged tasks");
+
+				for (unsigned int i = 0; i < staged_tasks.size();) {
+					TaskItem &item = staged_tasks[i];
+					item.cached_priority = item.task->get_priority();
+
+					if (item.task->is_cancelled()) {
+						cancelled_tasks.push_back(item.task);
+						staged_tasks[i] = staged_tasks.back();
+						staged_tasks.pop_back();
+						continue;
+					}
+
+					++i;
+				}
+
+				SortArray<TaskItem, TaskComparator> sorter;
+				sorter.sort(staged_tasks.data(), staged_tasks.size());
+			}
+
 			{
 				// TODO When tasks are very short and there are a lot of tasks, one thread can monopolize this mutex.
 				//
 				MutexLock lock(_tasks_mutex);
-				bool staged_tasks_moved = false;
 
-				// Move tasks from the staging queue.
-				// Lock with minimal risk of blocking the main thread, it should be very short.
-				if (_staged_tasks_mutex.try_lock()) {
-					if (_staged_tasks.size() > 0) {
-						append_array(_tasks, _staged_tasks);
-						_staged_tasks.clear();
-						staged_tasks_moved = true;
+				// Merge tasks from the staging queue. Priorities were already computed before taking this lock.
+				if (staged_tasks.size() > 0) {
+					if (_tasks.size() == 0) {
+						_tasks.swap(staged_tasks);
+
+					} else {
+						StdVector<TaskItem> merged_tasks;
+						merged_tasks.resize(_tasks.size() + staged_tasks.size());
+
+						size_t tasks_i = 0;
+						size_t staged_i = 0;
+						size_t dst_i = 0;
+
+						TaskComparator comparator;
+						while (tasks_i < _tasks.size() && staged_i < staged_tasks.size()) {
+							if (comparator(_tasks[tasks_i], staged_tasks[staged_i])) {
+								merged_tasks[dst_i] = _tasks[tasks_i];
+								++tasks_i;
+							} else {
+								merged_tasks[dst_i] = staged_tasks[staged_i];
+								++staged_i;
+							}
+							++dst_i;
+						}
+						while (tasks_i < _tasks.size()) {
+							merged_tasks[dst_i] = _tasks[tasks_i];
+							++tasks_i;
+							++dst_i;
+						}
+						while (staged_i < staged_tasks.size()) {
+							merged_tasks[dst_i] = staged_tasks[staged_i];
+							++staged_i;
+							++dst_i;
+						}
+
+						_tasks.swap(merged_tasks);
 					}
-					_staged_tasks_mutex.unlock();
+					staged_tasks.clear();
 				}
 
 				// Pick best tasks from the prioritized queue
@@ -222,7 +287,7 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 					// priority location can change. Some tasks can even become irrelevant before they are run,so we
 					// may remove them from the list so they don't slow down the process.
 					const uint64_t now = Time::get_singleton()->get_ticks_msec();
-					if (staged_tasks_moved || now - _last_priority_update_time_ms > _priority_update_period_ms) {
+					if (now - _last_priority_update_time_ms > _priority_update_period_ms) {
 						ZN_PROFILE_SCOPE_NAMED("Sorting");
 
 						{
@@ -242,12 +307,6 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 							}
 						}
 
-						struct TaskComparator {
-							inline bool operator()(const TaskItem &a, const TaskItem &b) const {
-								// Tasks with highest priority come last (easier pop back)
-								return a.cached_priority < b.cached_priority;
-							}
-						};
 						SortArray<TaskItem, TaskComparator> sorter;
 						sorter.sort(_tasks.data(), _tasks.size());
 

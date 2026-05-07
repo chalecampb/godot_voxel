@@ -46,7 +46,7 @@ This summarizes the clipbox improvement cherry-picked from `sgn_remake` and the 
 | `TaskPriority::BAND_MAX - min(lod_index, BAND_MAX)` | Gives `LOD 0` the highest LOD priority band, then `LOD 1`, then lower priority for increasing LODs, clamped against underflow. |
 | `priority.band1 = get_lod_priority_band(lod_index)` | Makes LOD ordering take precedence over distance while preserving existing task type priority and distance priority bands. |
 | `test_task_priority_values()` assertions | Adds regression coverage proving the LOD priority band decreases from LOD 0 to LOD 1 to LOD 2 and clamps at 255. |
-| `ThreadedTaskRunner` staged-task admission | Recomputes and sorts task priorities immediately when staged tasks enter the runnable queue, so newly nearby mesh tasks do not wait for the periodic priority refresh before outranking old distant tasks. |
+| `ThreadedTaskRunner` staged-task admission | Recomputes and sorts only newly staged task priorities immediately, then merges them into the cached-priority queue so nearby new mesh tasks can outrank old distant work without reprioritizing the whole backlog every time new work arrives. |
 | `test_threaded_task_runner_misc()` priority-order case | Adds regression coverage that enqueued tasks run by `TaskPriority`, not by the order they were staged. |
 | `PriorityDependency::ViewersData::viewers_count = 0` | Initializes the viewer count so immediate priority evaluation before the first viewer sync cannot read an undefined count. |
 | `PriorityDependency::evaluate()` uses `viewer_count == 0` | Treats zero synced viewers as the documented origin fallback, even though the backing viewer vector is preallocated. |
