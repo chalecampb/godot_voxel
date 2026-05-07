@@ -79,6 +79,22 @@ Box3i get_base_box_in_chunks(
 	return Box3i::from_min_max(minp, maxp);
 }
 
+int get_data_box_hysteresis_margin(const Box3i required_box) {
+	const int longest_axis = math::max(required_box.size.x, math::max(required_box.size.y, required_box.size.z));
+	return math::clamp(longest_axis / 16, 1, 8);
+}
+
+Box3i get_stabilized_data_box(const Box3i required_box, const Box3i previous_box, const Box3i bounds) {
+	if (required_box.is_empty()) {
+		return required_box;
+	}
+	const Box3i clipped_previous_box = previous_box.clipped(bounds);
+	if (!clipped_previous_box.is_empty() && clipped_previous_box.contains(required_box)) {
+		return clipped_previous_box;
+	}
+	return required_box.padded(get_data_box_hysteresis_margin(required_box)).clipped(bounds);
+}
+
 // Gets the smallest box a parent LOD must have in order to keep respecting the neighboring rule
 Box3i get_minimal_box_for_parent_lod(Box3i child_lod_box, bool make_even) {
 	const int min_pad = 1;
@@ -340,7 +356,7 @@ void process_viewers(
 
 				const Box3i &mesh_box = paired_viewer.state.mesh_box_per_lod[lod_index];
 
-				const Box3i data_box =
+				const Box3i required_data_box =
 						Box3i(mesh_box.position * mesh_to_data_factor, mesh_box.size * mesh_to_data_factor)
 								// To account for meshes requiring neighbor data chunks.
 								// It technically breaks the subdivision rule (where every parent block always has 8
@@ -348,7 +364,11 @@ void process_viewers(
 								.padded(1)
 								.clipped(volume_bounds_in_data_blocks);
 
-				paired_viewer.state.data_box_per_lod[lod_index] = data_box;
+				paired_viewer.state.data_box_per_lod[lod_index] = get_stabilized_data_box(
+						required_data_box,
+						paired_viewer.prev_state.data_box_per_lod[lod_index],
+						volume_bounds_in_data_blocks
+				);
 			}
 
 		} else {
@@ -378,7 +398,7 @@ void process_viewers(
 						)
 				);
 
-				const Box3i new_data_box =
+				const Box3i required_data_box =
 						get_base_box_in_chunks(
 								paired_viewer.state.local_position_voxels,
 								// Making sure that distance is a multiple of chunk size, for consistent box size
@@ -394,7 +414,11 @@ void process_viewers(
 				// 		lod_distance_in_data_chunks, data_block_size_po2, lod_index)
 				// 								   .clipped(volume_bounds_in_data_blocks);
 
-				paired_viewer.state.data_box_per_lod[lod_index] = new_data_box;
+				paired_viewer.state.data_box_per_lod[lod_index] = get_stabilized_data_box(
+						required_data_box,
+						paired_viewer.prev_state.data_box_per_lod[lod_index],
+						volume_bounds_in_data_blocks
+				);
 			}
 		}
 	}
@@ -444,9 +468,7 @@ void add_loading_block(
 
 void unreference_data_block_from_loading_lists(
 		StdUnorderedMap<Vector3i, VoxelLodTerrainUpdateData::LoadingDataBlock> &loading_blocks,
-		StdVector<VoxelLodTerrainUpdateData::BlockToLoad> &data_blocks_to_load,
-		Vector3i bpos,
-		unsigned int lod_index
+		Vector3i bpos
 ) {
 	auto loading_block_it = loading_blocks.find(bpos);
 	if (loading_block_it == loading_blocks.end()) {
@@ -467,18 +489,6 @@ void unreference_data_block_from_loading_lists(
 		}
 
 		loading_blocks.erase(loading_block_it);
-
-		// Also remove from blocks about to be added to the loading queue
-		VoxelLodTerrainUpdateData::BlockLocation bloc{ bpos, static_cast<uint8_t>(lod_index) };
-		for (size_t i = 0; i < data_blocks_to_load.size(); ++i) {
-			if (data_blocks_to_load[i].loc == bloc) {
-				data_blocks_to_load[i] = data_blocks_to_load.back();
-				data_blocks_to_load.pop_back();
-				// We don't touch the cancellation token since tasks haven't been spawned yet for
-				// these
-				break;
-			}
-		}
 	}
 }
 
@@ -611,9 +621,7 @@ void process_data_blocks_sliding_box(
 					if (tls_missing_blocks.size() > 0) {
 						MutexLock mlock(lod.loading_blocks_mutex);
 						for (const Vector3i bpos : tls_missing_blocks) {
-							unreference_data_block_from_loading_lists(
-									lod.loading_blocks, data_blocks_to_load, bpos, lod_index
-							);
+							unreference_data_block_from_loading_lists(lod.loading_blocks, bpos);
 						}
 					}
 				}
@@ -658,6 +666,21 @@ void process_data_blocks_sliding_box(
 
 		} // for each lod
 	} // for each viewer
+
+	if (data_blocks_to_load.size() > 0) {
+		size_t dst_i = 0;
+		for (size_t src_i = 0; src_i < data_blocks_to_load.size(); ++src_i) {
+			const VoxelLodTerrainUpdateData::BlockToLoad &btl = data_blocks_to_load[src_i];
+			if (btl.cancellation_token.is_valid() && btl.cancellation_token.is_cancelled()) {
+				continue;
+			}
+			if (dst_i != src_i) {
+				data_blocks_to_load[dst_i] = data_blocks_to_load[src_i];
+			}
+			++dst_i;
+		}
+		data_blocks_to_load.resize(dst_i);
+	}
 
 	// state.clipbox_streaming.lod_distance_in_data_chunks_previous_update = lod_distance_in_data_chunks;
 }
