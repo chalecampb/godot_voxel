@@ -80,8 +80,6 @@ struct DistanceSortItem {
 	uint16_t bucket;
 };
 
-static const unsigned int MAX_DATA_LOAD_REQUESTS_PER_UPDATE = 16384;
-
 uint16_t get_distance_sort_bucket(float closest_distance_sq, unsigned int lod_index, bool require_visual) {
 	const int distance = static_cast<int>(Math::sqrt(closest_distance_sq));
 	const uint16_t distance_bucket =
@@ -198,30 +196,6 @@ void sort_data_loads_by_viewer_distance(
 	for (unsigned int i = 0; i < blocks_to_load.size(); ++i) {
 		blocks_to_load[i] = sorted_loads[i];
 	}
-}
-
-void limit_data_load_requests(
-		StdVector<VoxelLodTerrainUpdateData::BlockToLoad> &blocks_to_load,
-		VoxelLodTerrainUpdateData::State &state
-) {
-	if (blocks_to_load.size() <= MAX_DATA_LOAD_REQUESTS_PER_UPDATE) {
-		return;
-	}
-
-	for (size_t i = MAX_DATA_LOAD_REQUESTS_PER_UPDATE; i < blocks_to_load.size(); ++i) {
-		const VoxelLodTerrainUpdateData::BlockToLoad &block_to_load = blocks_to_load[i];
-		ZN_ASSERT_CONTINUE(block_to_load.loc.lod < state.lods.size());
-
-		VoxelLodTerrainUpdateData::Lod &lod = state.lods[block_to_load.loc.lod];
-		MutexLock mlock(lod.loading_blocks_mutex);
-		auto loading_block_it = lod.loading_blocks.find(block_to_load.loc.position);
-		if (loading_block_it != lod.loading_blocks.end()) {
-			loading_block_it->second.cancellation_token.cancel();
-			lod.loading_blocks.erase(loading_block_it);
-		}
-	}
-
-	blocks_to_load.resize(MAX_DATA_LOAD_REQUESTS_PER_UPDATE);
 }
 
 // This is only if we want to cache voxel data
@@ -1168,7 +1142,6 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 				sort_data_loads_by_viewer_distance(
 						data_blocks_to_load, data_block_size, _shared_viewers_data, _volume_transform
 				);
-				limit_data_load_requests(data_blocks_to_load, state);
 
 				if (stream.is_null() && !settings.cache_generated_blocks) {
 					// TODO Optimization: not ideal because a bit delayed. It requires a second update cycle for meshes

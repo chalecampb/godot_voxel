@@ -59,7 +59,5 @@ This summarizes the clipbox improvement cherry-picked from `sgn_remake` and the 
 | `send_mesh_requests()` batch flushes | Flushes mesh tasks every 64 requests, allowing worker threads to begin meshing while the update task continues preparing later requests. |
 | `VoxelLodTerrainUpdateTask::run()` IO flush before meshing | Starts queued load/generation/save work before mesh request preparation, keeping the worker pool fed earlier in the update cycle. |
 | `sort_data_loads_by_viewer_distance()` | Orders pending data loads by nearest viewer distance before dispatch, so generation and streaming feed nearby mesh work first instead of following clipbox traversal order. |
-| `limit_data_load_requests()` | Caps how many nearest-first data loads are dispatched by a single update, preventing very large view distances from flooding the serial stream queue with far-horizon requests. |
-| Deferred data-load unmarking | Removes capped-off far requests from `loading_blocks` and cancels their token so a later update can reconsider them from the latest viewer position. |
 | Linear distance buckets for mesh/data dispatch | Replaces full comparison sort in the update task with bounded priority buckets, preserving near-first order without spending O(n log n) time on huge request lists. |
 | Adaptive full queue priority refresh | Keeps immediate priority sorting for newly staged tasks, but backs off repeated full queued-task resorts when the backlog is very large so workers spend more time executing tasks. |
