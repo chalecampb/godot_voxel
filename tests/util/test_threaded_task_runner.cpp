@@ -143,6 +143,55 @@ void test_threaded_task_runner_misc() {
 	ZN_TEST_ASSERT(serial_counter->completed_count == 16);
 	ZN_TEST_ASSERT(serial_counter->max_count == 1);
 	ZN_TEST_ASSERT(serial_counter->current_count == 0);
+
+	// Newly enqueued tasks must be prioritized before the first periodic priority refresh.
+	// The low-priority task is enqueued last so FIFO/LIFO ordering would fail this.
+	{
+		struct PriorityOrder {
+			StdVector<int> values;
+			Mutex mutex;
+
+			void push(int value) {
+				MutexLock lock(mutex);
+				values.push_back(value);
+			}
+		};
+
+		class PriorityTestTask : public IThreadedTask {
+		public:
+			PriorityTestTask(std::shared_ptr<PriorityOrder> p_order, int p_value, TaskPriority p_priority) :
+					order(p_order), value(p_value), priority(p_priority) {}
+
+			void run(ThreadedTaskContext &ctx) override {
+				order->push(value);
+			}
+
+			TaskPriority get_priority() override {
+				return priority;
+			}
+
+			std::shared_ptr<PriorityOrder> order;
+			int value;
+			TaskPriority priority;
+		};
+
+		ThreadedTaskRunner priority_runner;
+		priority_runner.set_priority_update_period(60'000);
+
+		std::shared_ptr<PriorityOrder> order = make_shared_instance<PriorityOrder>();
+		priority_runner.enqueue(ZN_NEW(PriorityTestTask(order, 1, TaskPriority(0, 0, 0, 0))), false);
+		priority_runner.enqueue(ZN_NEW(PriorityTestTask(order, 2, TaskPriority(255, 255, 255, 255))), false);
+		priority_runner.enqueue(ZN_NEW(PriorityTestTask(order, 3, TaskPriority(1, 0, 0, 0))), false);
+
+		priority_runner.set_thread_count(1);
+		priority_runner.wait_for_all_tasks();
+		L::dequeue_tasks(priority_runner);
+
+		ZN_TEST_ASSERT(order->values.size() == 3);
+		ZN_TEST_ASSERT(order->values[0] == 2);
+		ZN_TEST_ASSERT(order->values[1] == 3);
+		ZN_TEST_ASSERT(order->values[2] == 1);
+	}
 }
 
 void test_threaded_task_runner_debug_names() {

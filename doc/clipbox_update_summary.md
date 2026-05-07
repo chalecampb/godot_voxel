@@ -46,3 +46,5 @@ This summarizes the clipbox improvement cherry-picked from `sgn_remake` and the 
 | `TaskPriority::BAND_MAX - min(lod_index, BAND_MAX)` | Gives `LOD 0` the highest LOD priority band, then `LOD 1`, then lower priority for increasing LODs, clamped against underflow. |
 | `priority.band1 = get_lod_priority_band(lod_index)` | Makes LOD ordering take precedence over distance while preserving existing task type priority and distance priority bands. |
 | `test_task_priority_values()` assertions | Adds regression coverage proving the LOD priority band decreases from LOD 0 to LOD 1 to LOD 2 and clamps at 255. |
+| `ThreadedTaskRunner` staged-task admission | Recomputes and sorts task priorities immediately when staged tasks enter the runnable queue, so newly nearby mesh tasks do not wait for the periodic priority refresh before outranking old distant tasks. |
+| `test_threaded_task_runner_misc()` priority-order case | Adds regression coverage that enqueued tasks run by `TaskPriority`, not by the order they were staged. |

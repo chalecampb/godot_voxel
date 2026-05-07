@@ -201,12 +201,16 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 				// TODO When tasks are very short and there are a lot of tasks, one thread can monopolize this mutex.
 				//
 				MutexLock lock(_tasks_mutex);
+				bool staged_tasks_moved = false;
 
 				// Move tasks from the staging queue.
 				// Lock with minimal risk of blocking the main thread, it should be very short.
 				if (_staged_tasks_mutex.try_lock()) {
-					append_array(_tasks, _staged_tasks);
-					_staged_tasks.clear();
+					if (_staged_tasks.size() > 0) {
+						append_array(_tasks, _staged_tasks);
+						_staged_tasks.clear();
+						staged_tasks_moved = true;
+					}
 					_staged_tasks_mutex.unlock();
 				}
 
@@ -218,7 +222,7 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 					// priority location can change. Some tasks can even become irrelevant before they are run,so we
 					// may remove them from the list so they don't slow down the process.
 					const uint64_t now = Time::get_singleton()->get_ticks_msec();
-					if (now - _last_priority_update_time_ms > _priority_update_period_ms) {
+					if (staged_tasks_moved || now - _last_priority_update_time_ms > _priority_update_period_ms) {
 						ZN_PROFILE_SCOPE_NAMED("Sorting");
 
 						{
