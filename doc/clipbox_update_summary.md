@@ -50,3 +50,6 @@ This summarizes the clipbox improvement cherry-picked from `sgn_remake` and the 
 | `test_threaded_task_runner_misc()` priority-order case | Adds regression coverage that enqueued tasks run by `TaskPriority`, not by the order they were staged. |
 | `PriorityDependency::ViewersData::viewers_count = 0` | Initializes the viewer count so immediate priority evaluation before the first viewer sync cannot read an undefined count. |
 | `PriorityDependency::evaluate()` uses `viewer_count == 0` | Treats zero synced viewers as the documented origin fallback, even though the backing viewer vector is preallocated. |
+| `send_mesh_requests()` nearest-first ordering | Sorts pending mesh requests inside each LOD by visible requirement first, then closest viewer distance, so new mesh areas do not populate evenly by clipbox traversal order. |
+| `send_mesh_requests()` batch flushes | Flushes mesh tasks every 64 requests, allowing worker threads to begin meshing while the update task continues preparing later requests. |
+| `VoxelLodTerrainUpdateTask::run()` IO flush before meshing | Starts queued load/generation/save work before mesh request preparation, keeping the worker pool fed earlier in the update cycle. |

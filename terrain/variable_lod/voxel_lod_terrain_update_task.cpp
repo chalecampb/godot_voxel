@@ -9,6 +9,7 @@
 #include "../../util/containers/container_funcs.h"
 #include "../../util/dstack.h"
 #include "../../util/godot/classes/engine.h"
+#include "../../util/godot/core/sort_array.h"
 #include "../../util/math/conv.h"
 #include "../../util/profiling.h"
 #include "../../util/profiling_clock.h"
@@ -52,6 +53,68 @@ void init_sparse_octree_priority_dependency(
 			2.f * transformed_block_radius *
 			VoxelEngine::get_octree_lod_block_region_extent(octree_lod_distance, data_block_size)
 	);
+}
+
+void sort_mesh_updates_by_viewer_distance(
+		StdVector<VoxelLodTerrainUpdateData::MeshToUpdate> &mesh_updates,
+		const unsigned int lod_index,
+		const int mesh_block_size,
+		const std::shared_ptr<PriorityDependency::ViewersData> &shared_viewers_data,
+		const Transform3D &volume_transform
+) {
+	if (mesh_updates.size() < 2) {
+		return;
+	}
+
+	struct MeshUpdateWithPriority {
+		VoxelLodTerrainUpdateData::MeshToUpdate update;
+		float closest_distance_sq;
+	};
+
+	static thread_local StdVector<MeshUpdateWithPriority> tls_sorted_updates;
+	StdVector<MeshUpdateWithPriority> &sorted_updates = tls_sorted_updates;
+	sorted_updates.clear();
+	sorted_updates.resize(mesh_updates.size());
+
+	const StdVector<Vector3f> &viewer_positions = shared_viewers_data->viewers;
+	const unsigned int viewer_count = shared_viewers_data->viewers_count;
+	ZN_ASSERT_RETURN(viewer_count <= viewer_positions.size());
+
+	for (unsigned int i = 0; i < mesh_updates.size(); ++i) {
+		const VoxelLodTerrainUpdateData::MeshToUpdate &mesh_update = mesh_updates[i];
+		const Vector3i voxel_pos = get_block_center(mesh_update.position, mesh_block_size, lod_index);
+		const Vector3f world_position = to_vec3f(volume_transform.xform(voxel_pos));
+
+		float closest_distance_sq;
+		if (viewer_count == 0) {
+			closest_distance_sq = math::length_squared(world_position);
+		} else {
+			closest_distance_sq = math::distance_squared(viewer_positions[0], world_position);
+			for (unsigned int viewer_index = 1; viewer_index < viewer_count; ++viewer_index) {
+				closest_distance_sq = math::min(
+						closest_distance_sq, math::distance_squared(viewer_positions[viewer_index], world_position)
+				);
+			}
+		}
+
+		sorted_updates[i] = MeshUpdateWithPriority{ mesh_update, closest_distance_sq };
+	}
+
+	struct MeshUpdateComparator {
+		inline bool operator()(const MeshUpdateWithPriority &a, const MeshUpdateWithPriority &b) const {
+			if (a.update.require_visual != b.update.require_visual) {
+				return a.update.require_visual;
+			}
+			return a.closest_distance_sq < b.closest_distance_sq;
+		}
+	};
+
+	SortArray<MeshUpdateWithPriority, MeshUpdateComparator> sorter;
+	sorter.sort(sorted_updates.data(), sorted_updates.size());
+
+	for (unsigned int i = 0; i < sorted_updates.size(); ++i) {
+		mesh_updates[i] = sorted_updates[i].update;
+	}
 }
 
 // This is only if we want to cache voxel data
@@ -308,10 +371,15 @@ void send_mesh_requests(
 	const int mesh_block_size = 1 << settings.mesh_block_size_po2;
 	const int render_to_data_factor = mesh_block_size / data_block_size;
 	const unsigned int lod_count = data.get_lod_count();
+	static const unsigned int FLUSH_BATCH_SIZE = 64;
+	unsigned int pushed_since_flush = 0;
 
 	for (unsigned int lod_index = 0; lod_index < lod_count; ++lod_index) {
 		ZN_PROFILE_SCOPE();
 		VoxelLodTerrainUpdateData::Lod &lod = state.lods[lod_index];
+		sort_mesh_updates_by_viewer_distance(
+				lod.mesh_blocks_pending_update, lod_index, mesh_block_size, shared_viewers_data, volume_transform
+		);
 
 		for (unsigned int bi = 0; bi < lod.mesh_blocks_pending_update.size(); ++bi) {
 			ZN_PROFILE_SCOPE();
@@ -383,9 +451,15 @@ void send_mesh_requests(
 			);
 
 			task_scheduler.push_main_task(task);
+			++pushed_since_flush;
 
 			mesh_block.state = VoxelLodTerrainUpdateData::MESH_UPDATE_SENT;
 			mesh_block.update_list_index = -1;
+
+			if (pushed_since_flush >= FLUSH_BATCH_SIZE) {
+				task_scheduler.flush();
+				pushed_since_flush = 0;
+			}
 		}
 
 		lod.mesh_blocks_pending_update.clear();
@@ -1018,6 +1092,7 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 		}
 	}
 	state.stats.time_io_requests = profiling_clock.restart();
+	task_scheduler.flush();
 
 	// TODO When no mesher is assigned, mesh requests are still accumulated but not being sent. A better way to support
 	// this is by allowing voxels-only/mesh-less viewers, similar to VoxelTerrain
