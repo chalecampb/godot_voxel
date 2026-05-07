@@ -2748,8 +2748,9 @@ void test_voxel_graph_script_node_contract() {
 	VoxelGraphFunction::ShaderResult shader_result = g.get_shader_source();
 	ZN_TEST_ASSERT(shader_result.compilation.success);
 	const StdString &code = shader_result.code_utf8;
-	ZN_TEST_ASSERT(code.find("void sgn_test_node_sgn_") != StdString::npos);
-	ZN_TEST_ASSERT(code.find("const float sgn_test_node_sgn_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find("void sgn_test_node_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find("const float sgn_test_node_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find("sgn_test_node_sgn_") == StdString::npos);
 	ZN_TEST_ASSERT(code.find(" = 3") != StdString::npos);
 }
 

@@ -138,7 +138,7 @@ std::string get_script_graph_node_shader_prefix(Ref<VoxelGraphScriptNode> script
 	const String script_namespace_gd = script_node->get_script_path().get_file().get_basename();
 	const StdString script_namespace_tmp = zylann::godot::to_std_string(script_namespace_gd);
 	return format(
-			"{}_sgn_{}_",
+			"{}_{}_",
 			sanitize_glsl_identifier(std::string(script_namespace_tmp.c_str())).c_str(),
 			node_id
 	).c_str();
