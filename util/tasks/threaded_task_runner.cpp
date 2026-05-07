@@ -125,20 +125,6 @@ void ThreadedTaskRunner::set_priority_update_period(uint32_t milliseconds) {
 	_priority_update_period_ms = milliseconds;
 }
 
-ThreadedTaskRunner::DebugStats ThreadedTaskRunner::get_and_reset_debug_stats() {
-	DebugStats stats;
-	stats.staged_sort_count = _debug_staged_sort_count.exchange(0);
-	stats.staged_sorted_tasks = _debug_staged_sorted_tasks.exchange(0);
-	stats.staged_sort_usec = _debug_staged_sort_usec.exchange(0);
-	stats.merge_count = _debug_merge_count.exchange(0);
-	stats.merged_tasks = _debug_merged_tasks.exchange(0);
-	stats.merge_usec = _debug_merge_usec.exchange(0);
-	stats.priority_sort_count = _debug_priority_sort_count.exchange(0);
-	stats.priority_sorted_tasks = _debug_priority_sorted_tasks.exchange(0);
-	stats.priority_sort_usec = _debug_priority_sort_usec.exchange(0);
-	return stats;
-}
-
 void ThreadedTaskRunner::enqueue(IThreadedTask *task, bool serial) {
 	ZN_PROFILE_SCOPE();
 	ZN_ASSERT(task != nullptr);
@@ -246,8 +232,6 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 
 			if (staged_tasks.size() > 0) {
 				ZN_PROFILE_SCOPE_NAMED("Prioritize staged tasks");
-				const uint64_t sort_begin_usec = Time::get_singleton()->get_ticks_usec();
-				const uint64_t staged_task_count = staged_tasks.size();
 
 				for (unsigned int i = 0; i < staged_tasks.size();) {
 					TaskItem &item = staged_tasks[i];
@@ -265,10 +249,6 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 
 				SortArray<TaskItem, TaskComparator> sorter;
 				sorter.sort(staged_tasks.data(), staged_tasks.size());
-
-				_debug_staged_sort_count.fetch_add(1);
-				_debug_staged_sorted_tasks.fetch_add(staged_task_count);
-				_debug_staged_sort_usec.fetch_add(Time::get_singleton()->get_ticks_usec() - sort_begin_usec);
 			}
 
 			{
@@ -285,8 +265,6 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 					update_batch_flags(batch);
 					_task_count += batch.tasks.size();
 					_task_batches.push_back(std::move(batch));
-					_debug_merge_count.fetch_add(1);
-					_debug_merged_tasks.fetch_add(_task_count);
 				}
 
 				// Pick best tasks from the prioritized queue
@@ -305,8 +283,6 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 					}
 					if (now - _last_priority_update_time_ms > priority_update_period_ms) {
 						ZN_PROFILE_SCOPE_NAMED("Sorting");
-						const uint64_t sort_begin_usec = Time::get_singleton()->get_ticks_usec();
-						const uint64_t sorted_task_count = _task_count;
 						StdVector<TaskItem> sorted_tasks;
 						sorted_tasks.reserve(_task_count);
 
@@ -352,9 +328,6 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 						}
 
 						_last_priority_update_time_ms = Time::get_singleton()->get_ticks_msec();
-						_debug_priority_sort_count.fetch_add(1);
-						_debug_priority_sorted_tasks.fetch_add(sorted_task_count);
-						_debug_priority_sort_usec.fetch_add(Time::get_singleton()->get_ticks_usec() - sort_begin_usec);
 					}
 
 					// Pick task with highest priority if possible

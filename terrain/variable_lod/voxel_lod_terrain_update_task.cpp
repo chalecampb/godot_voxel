@@ -9,7 +9,6 @@
 #include "../../util/containers/container_funcs.h"
 #include "../../util/dstack.h"
 #include "../../util/godot/classes/engine.h"
-#include "../../util/godot/classes/time.h"
 #include "../../util/math/conv.h"
 #include "../../util/profiling.h"
 #include "../../util/profiling_clock.h"
@@ -534,14 +533,12 @@ void send_mesh_requests(
 
 			task_scheduler.push_main_task(task);
 			++pushed_since_flush;
-			++state.stats.mesh_requests;
 
 			mesh_block.state = VoxelLodTerrainUpdateData::MESH_UPDATE_SENT;
 			mesh_block.update_list_index = -1;
 
 			if (pushed_since_flush >= FLUSH_BATCH_SIZE) {
 				task_scheduler.flush();
-				++state.stats.mesh_request_flushes;
 				pushed_since_flush = 0;
 			}
 		}
@@ -1118,9 +1115,6 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 		);
 	}
 	state.stats.time_detect_required_blocks = profiling_clock.restart();
-	state.stats.data_load_requests = data_blocks_to_load.size();
-	state.stats.mesh_requests = 0;
-	state.stats.mesh_request_flushes = 0;
 
 	BufferedTaskScheduler &task_scheduler = BufferedTaskScheduler::get_for_current_thread();
 
@@ -1205,23 +1199,6 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 	state.stats.time_mesh_requests = profiling_clock.restart();
 
 	state.stats.time_total = profiling_clock.restart();
-	static uint64_t s_last_update_log_time_ms = 0;
-	const uint64_t now_ms = Time::get_singleton()->get_ticks_msec();
-	const bool has_activity = state.stats.data_load_requests > 0 || state.stats.mesh_requests > 0;
-	if (has_activity && (now_ms - s_last_update_log_time_ms > 1000 || state.stats.time_total > 100000 ||
-							  state.stats.data_load_requests > 10000 || state.stats.mesh_requests > 10000)) {
-		print_line(format(
-				"VLT update: total={}us detect={}us io={}us mesh_req={}us data_loads={} mesh_reqs={} mesh_flushes={}",
-				state.stats.time_total,
-				state.stats.time_detect_required_blocks,
-				state.stats.time_io_requests,
-				state.stats.time_mesh_requests,
-				state.stats.data_load_requests,
-				state.stats.mesh_requests,
-				state.stats.mesh_request_flushes
-		));
-		s_last_update_log_time_ms = now_ms;
-	}
 }
 
 } // namespace zylann::voxel

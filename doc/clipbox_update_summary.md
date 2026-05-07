@@ -46,7 +46,12 @@ This summarizes the clipbox improvement cherry-picked from `sgn_remake` and the 
 | `TaskPriority::BAND_MAX - min(lod_index, BAND_MAX)` | Gives `LOD 0` the highest LOD priority band, then `LOD 1`, then lower priority for increasing LODs, clamped against underflow. |
 | `priority.band1 = get_lod_priority_band(lod_index)` | Makes LOD ordering take precedence over distance while preserving existing task type priority and distance priority bands. |
 | `test_task_priority_values()` assertions | Adds regression coverage proving the LOD priority band decreases from LOD 0 to LOD 1 to LOD 2 and clamps at 255. |
-| `ThreadedTaskRunner` staged-task admission | Recomputes and sorts only newly staged task priorities immediately, then merges them into the cached-priority queue so nearby new mesh tasks can outrank old distant work without reprioritizing the whole backlog every time new work arrives. |
+| `ThreadedTaskRunner` staged-task admission | Recomputes and sorts only newly staged task priorities immediately so nearby new mesh tasks can outrank old distant work without reprioritizing the whole backlog every time new work arrives. |
+| `ThreadedTaskRunner::TaskBatch` | Stores staged tasks as sorted batches instead of repeatedly merging small batches into one very large sorted vector. |
+| `_task_batches` / `_task_count` | Tracks the queued work as multiple sorted batches plus an aggregate count, preserving task accounting while avoiding full-list copies when the backlog is huge. |
+| Best-batch task pickup | Compares the highest-priority candidate from each batch and runs the best available task, so newer high-priority mesh/generation work can be selected even when a large stream backlog already exists. |
+| Serial-batch skipping | Skips serial-only batches while another serial task is running, allowing worker threads to keep picking parallel mesh/generation work instead of repeatedly scanning blocked stream tasks. |
+| Periodic priority refresh rebuilds batches | When the dynamic priority refresh runs, valid queued tasks are reprioritized, globally sorted, and split back into serial and parallel batches. |
 | `test_threaded_task_runner_misc()` priority-order case | Adds regression coverage that enqueued tasks run by `TaskPriority`, not by the order they were staged. |
 | `PriorityDependency::ViewersData::viewers_count = 0` | Initializes the viewer count so immediate priority evaluation before the first viewer sync cannot read an undefined count. |
 | `PriorityDependency::evaluate()` uses `viewer_count == 0` | Treats zero synced viewers as the documented origin fallback, even though the backing viewer vector is preallocated. |
@@ -56,5 +61,3 @@ This summarizes the clipbox improvement cherry-picked from `sgn_remake` and the 
 | `sort_data_loads_by_viewer_distance()` | Orders pending data loads by nearest viewer distance before dispatch, so generation and streaming feed nearby mesh work first instead of following clipbox traversal order. |
 | Linear distance buckets for mesh/data dispatch | Replaces full comparison sort in the update task with bounded priority buckets, preserving near-first order without spending O(n log n) time on huge request lists. |
 | Adaptive full queue priority refresh | Keeps immediate priority sorting for newly staged tasks, but backs off repeated full queued-task resorts when the backlog is very large so workers spend more time executing tasks. |
-| `Voxel tasks:` verbose aggregate log | Adds once-per-second task throughput diagnostics with pending/completed counts and aggregate staged-sort, merge, and full queue-sort timings. |
-| `VLT update:` verbose aggregate log | Logs expensive update cycles with total, detection, IO request, mesh request, data-load, mesh-request, and flush counts without logging inside inner loops. |
