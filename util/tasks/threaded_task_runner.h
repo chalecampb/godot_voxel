@@ -113,6 +113,7 @@ public:
 private:
 	static StdVector<IThreadedTask *> &get_completed_tasks_temp_tls();
 
+public:
 	struct TaskItem {
 		IThreadedTask *task = nullptr;
 		TaskPriority cached_priority;
@@ -120,6 +121,13 @@ private:
 		ThreadedTaskContext::Status status = ThreadedTaskContext::STATUS_COMPLETE;
 	};
 
+	struct TaskBatch {
+		StdVector<TaskItem> tasks;
+		unsigned int serial_count = 0;
+		unsigned int parallel_count = 0;
+	};
+
+private:
 	struct ThreadData {
 		Thread thread;
 		ThreadedTaskRunner *pool = nullptr;
@@ -160,10 +168,10 @@ private:
 	StdVector<TaskItem> _staged_tasks;
 	Mutex _staged_tasks_mutex;
 
-	// Main waiting list. Tasks are picked from it by priority. Priority can also change while tasks are in this list,
-	// so we can't use a simple queue or sort at insertion. Every available thread has to find it and potentially update
-	// it every once in a while.
-	StdVector<TaskItem> _tasks;
+	// Main waiting lists. Each batch is sorted by priority. Keeping batches separate avoids repeatedly merging small
+	// staged batches into very large queues, while still allowing workers to pick the best available task.
+	StdVector<TaskBatch> _task_batches;
+	unsigned int _task_count = 0;
 	Mutex _tasks_mutex;
 	Semaphore _tasks_semaphore;
 

@@ -327,7 +327,7 @@ void VoxelEngine::process() {
 		if (pending_tasks > 0 || s_completed_threaded_tasks_since_log > 0 || task_stats.staged_sort_count > 0 ||
 				task_stats.merge_count > 0 || task_stats.priority_sort_count > 0) {
 			print_line(format(
-					"Voxel tasks: completed={} pending={} generate={} mesh={} stream={} staged_sorts={}/{} {}us merges={}/{} {}us queue_sorts={}/{} {}us",
+					"Voxel tasks: completed={} pending={} generate={} mesh={} stream={} staged_sorts={}/{} {}us batch_adds={}/{} queue_sorts={}/{} {}us",
 					s_completed_threaded_tasks_since_log,
 					pending_tasks,
 					_debug_generate_block_task_count.load(),
@@ -338,7 +338,6 @@ void VoxelEngine::process() {
 					task_stats.staged_sort_usec,
 					task_stats.merge_count,
 					task_stats.merged_tasks,
-					task_stats.merge_usec,
 					task_stats.priority_sort_count,
 					task_stats.priority_sorted_tasks,
 					task_stats.priority_sort_usec

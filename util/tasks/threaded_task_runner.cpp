@@ -7,6 +7,29 @@
 
 namespace zylann {
 
+namespace {
+
+struct TaskComparator {
+	inline bool operator()(const ThreadedTaskRunner::TaskItem &a, const ThreadedTaskRunner::TaskItem &b) const {
+		// Tasks with highest priority come last (easier pop back)
+		return a.cached_priority < b.cached_priority;
+	}
+};
+
+void update_batch_flags(ThreadedTaskRunner::TaskBatch &batch) {
+	batch.serial_count = 0;
+	batch.parallel_count = 0;
+	for (const ThreadedTaskRunner::TaskItem &item : batch.tasks) {
+		if (item.is_serial) {
+			++batch.serial_count;
+		} else {
+			++batch.parallel_count;
+		}
+	}
+}
+
+} // namespace
+
 ThreadedTaskRunner::ThreadedTaskRunner() {}
 
 ThreadedTaskRunner::~ThreadedTaskRunner() {
@@ -16,7 +39,7 @@ ThreadedTaskRunner::~ThreadedTaskRunner() {
 	if (_staged_tasks.size() != 0) {
 		ZN_PRINT_ERROR("There are staged tasks remaining!");
 	}
-	if (_tasks.size() != 0) {
+	if (_task_count != 0) {
 		ZN_PRINT_ERROR("There are tasks remaining!");
 	}
 	if (_spinning_tasks.size() != 0) {
@@ -221,13 +244,6 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 				_staged_tasks_mutex.unlock();
 			}
 
-			struct TaskComparator {
-				inline bool operator()(const TaskItem &a, const TaskItem &b) const {
-					// Tasks with highest priority come last (easier pop back)
-					return a.cached_priority < b.cached_priority;
-				}
-			};
-
 			if (staged_tasks.size() > 0) {
 				ZN_PROFILE_SCOPE_NAMED("Prioritize staged tasks");
 				const uint64_t sort_begin_usec = Time::get_singleton()->get_ticks_usec();
@@ -260,53 +276,21 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 				//
 				MutexLock lock(_tasks_mutex);
 
-				// Merge tasks from the staging queue. Priorities were already computed before taking this lock.
+				// Add staged tasks as their own sorted batch. Avoid repeatedly merging small staged batches into a
+				// huge queue, which is especially expensive when clipbox traversal creates hundreds of thousands of
+				// serial stream tasks.
 				if (staged_tasks.size() > 0) {
-					if (_tasks.size() == 0) {
-						_tasks.swap(staged_tasks);
-
-					} else {
-						const uint64_t merge_begin_usec = Time::get_singleton()->get_ticks_usec();
-						const uint64_t merged_task_count = _tasks.size() + staged_tasks.size();
-						StdVector<TaskItem> merged_tasks;
-						merged_tasks.resize(_tasks.size() + staged_tasks.size());
-
-						size_t tasks_i = 0;
-						size_t staged_i = 0;
-						size_t dst_i = 0;
-
-						TaskComparator comparator;
-						while (tasks_i < _tasks.size() && staged_i < staged_tasks.size()) {
-							if (comparator(_tasks[tasks_i], staged_tasks[staged_i])) {
-								merged_tasks[dst_i] = _tasks[tasks_i];
-								++tasks_i;
-							} else {
-								merged_tasks[dst_i] = staged_tasks[staged_i];
-								++staged_i;
-							}
-							++dst_i;
-						}
-						while (tasks_i < _tasks.size()) {
-							merged_tasks[dst_i] = _tasks[tasks_i];
-							++tasks_i;
-							++dst_i;
-						}
-						while (staged_i < staged_tasks.size()) {
-							merged_tasks[dst_i] = staged_tasks[staged_i];
-							++staged_i;
-							++dst_i;
-						}
-
-						_tasks.swap(merged_tasks);
-						_debug_merge_count.fetch_add(1);
-						_debug_merged_tasks.fetch_add(merged_task_count);
-						_debug_merge_usec.fetch_add(Time::get_singleton()->get_ticks_usec() - merge_begin_usec);
-					}
-					staged_tasks.clear();
+					TaskBatch batch;
+					batch.tasks.swap(staged_tasks);
+					update_batch_flags(batch);
+					_task_count += batch.tasks.size();
+					_task_batches.push_back(std::move(batch));
+					_debug_merge_count.fetch_add(1);
+					_debug_merged_tasks.fetch_add(_task_count);
 				}
 
 				// Pick best tasks from the prioritized queue
-				if (_tasks.size() != 0) {
+				if (_task_count != 0) {
 					// Sort periodically.
 					// The point to keep sorting after tasks have been inserted is in case there are lots of pending
 					// tasks, which can take more than a few seconds to be processed. A player can move fast and the
@@ -314,35 +298,58 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 					// may remove them from the list so they don't slow down the process.
 					const uint64_t now = Time::get_singleton()->get_ticks_msec();
 					uint32_t priority_update_period_ms = _priority_update_period_ms;
-					if (_tasks.size() > 65536) {
+					if (_task_count > 65536) {
 						priority_update_period_ms = math::max(priority_update_period_ms, 5000U);
-					} else if (_tasks.size() > 16384) {
+					} else if (_task_count > 16384) {
 						priority_update_period_ms = math::max(priority_update_period_ms, 2000U);
 					}
 					if (now - _last_priority_update_time_ms > priority_update_period_ms) {
 						ZN_PROFILE_SCOPE_NAMED("Sorting");
 						const uint64_t sort_begin_usec = Time::get_singleton()->get_ticks_usec();
-						const uint64_t sorted_task_count = _tasks.size();
+						const uint64_t sorted_task_count = _task_count;
+						StdVector<TaskItem> sorted_tasks;
+						sorted_tasks.reserve(_task_count);
 
 						{
 							ZN_PROFILE_SCOPE_NAMED("Update priorities");
-							for (unsigned int i = 0; i < _tasks.size();) {
-								TaskItem &item = _tasks[i];
-								item.cached_priority = item.task->get_priority();
+							for (TaskBatch &batch : _task_batches) {
+								for (unsigned int i = 0; i < batch.tasks.size(); ++i) {
+									TaskItem &item = batch.tasks[i];
+									item.cached_priority = item.task->get_priority();
 
-								if (item.task->is_cancelled()) {
-									cancelled_tasks.push_back(item.task);
-									_tasks[i] = _tasks.back();
-									_tasks.pop_back();
-									continue;
+									if (item.task->is_cancelled()) {
+										cancelled_tasks.push_back(item.task);
+										--_task_count;
+									} else {
+										sorted_tasks.push_back(item);
+									}
 								}
-
-								++i;
 							}
 						}
 
 						SortArray<TaskItem, TaskComparator> sorter;
-						sorter.sort(_tasks.data(), _tasks.size());
+						sorter.sort(sorted_tasks.data(), sorted_tasks.size());
+
+						_task_batches.clear();
+						if (sorted_tasks.size() > 0) {
+							TaskBatch serial_batch;
+							TaskBatch parallel_batch;
+							for (TaskItem &item : sorted_tasks) {
+								if (item.is_serial) {
+									serial_batch.tasks.push_back(item);
+								} else {
+									parallel_batch.tasks.push_back(item);
+								}
+							}
+							if (serial_batch.tasks.size() > 0) {
+								update_batch_flags(serial_batch);
+								_task_batches.push_back(std::move(serial_batch));
+							}
+							if (parallel_batch.tasks.size() > 0) {
+								update_batch_flags(parallel_batch);
+								_task_batches.push_back(std::move(parallel_batch));
+							}
+						}
 
 						_last_priority_update_time_ms = Time::get_singleton()->get_ticks_msec();
 						_debug_priority_sort_count.fetch_add(1);
@@ -351,22 +358,52 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 					}
 
 					// Pick task with highest priority if possible
-					// for (int i = int(_tasks.size()) - 1; i >= 0; --i) {
-					for (unsigned int i = _tasks.size(); i-- > 0;) {
-						const TaskItem item = _tasks[i];
-						// Serial tasks are a bit annoying in that regard...
-						// We could make the save/load tasks accept more than one work, which is the best way to do
-						// serial work, but in some cases it's harder to know in advance...
-						if (item.is_serial && _is_serial_task_running) {
-							// Try previous task
+					TaskComparator comparator;
+					unsigned int best_batch_index = 0;
+					unsigned int best_task_index = 0;
+					bool found_best = false;
+					for (unsigned int batch_index = 0; batch_index < _task_batches.size();) {
+						TaskBatch &batch = _task_batches[batch_index];
+						if (batch.tasks.size() == 0) {
+							_task_batches[batch_index] = std::move(_task_batches.back());
+							_task_batches.pop_back();
 							continue;
 						}
 
+						if (_is_serial_task_running && batch.parallel_count == 0) {
+							++batch_index;
+							continue;
+						}
+
+						for (unsigned int task_index = batch.tasks.size(); task_index-- > 0;) {
+							const TaskItem &item = batch.tasks[task_index];
+							if (item.is_serial && _is_serial_task_running) {
+								continue;
+							}
+							if (!found_best || comparator(_task_batches[best_batch_index].tasks[best_task_index], item)) {
+								best_batch_index = batch_index;
+								best_task_index = task_index;
+								found_best = true;
+							}
+							break;
+						}
+						++batch_index;
+					}
+
+					if (found_best) {
+						TaskBatch &batch = _task_batches[best_batch_index];
+						const TaskItem item = batch.tasks[best_task_index];
 						tasks.push_back(item);
-						// We don't just pop the last item because of serial task handling. But ordered removal should
-						// be fast enough since serial tasks aren't common.
-						_tasks.erase(_tasks.begin() + i);
-						break;
+						batch.tasks.erase(batch.tasks.begin() + best_task_index);
+						--_task_count;
+						if (batch.tasks.size() == 0) {
+							_task_batches[best_batch_index] = std::move(_task_batches.back());
+							_task_batches.pop_back();
+						} else if (item.is_serial) {
+							--batch.serial_count;
+						} else {
+							--batch.parallel_count;
+						}
 					}
 
 				} // For each task to pick
@@ -387,7 +424,7 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 					}
 				}
 
-				task_queue_was_empty = _tasks.size() == 0;
+				task_queue_was_empty = _task_count == 0;
 
 			} // Tasks queue mutex lock
 		}
@@ -522,7 +559,7 @@ void ThreadedTaskRunner::wait_for_all_tasks() {
 		}
 		if (!any_staged_tasks) {
 			MutexLock lock(_tasks_mutex);
-			if (_tasks.size() == 0) {
+			if (_task_count == 0) {
 				MutexLock lock2(_spinning_tasks_mutex);
 				if (_spinning_tasks.size() == 0) {
 					break;
