@@ -45,6 +45,8 @@ struct PriorityDependency {
 	// it's not always reliable and requires to handle "task drops" which is annoying
 	float drop_distance_squared;
 
+	static uint8_t get_lod_priority_band(uint8_t lod_index);
+
 	TaskPriority evaluate(uint8_t lod_index, uint8_t band2_priority, float *out_closest_distance_sq);
 };
 

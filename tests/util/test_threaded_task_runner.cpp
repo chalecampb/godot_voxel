@@ -1,4 +1,5 @@
 #include "test_threaded_task_runner.h"
+#include "../../engine/priority_dependency.h"
 #include "../../util/containers/std_unordered_map.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/classes/os.h"
@@ -274,6 +275,14 @@ void test_task_priority_values() {
 	ZN_TEST_ASSERT(TaskPriority(0, 0, 0, 0) < TaskPriority(0, 0, 0, 1));
 	ZN_TEST_ASSERT(TaskPriority(10, 0, 0, 0) < TaskPriority(0, 10, 0, 0));
 	ZN_TEST_ASSERT(TaskPriority(10, 10, 0, 0) < TaskPriority(10, 10, 10, 0));
+
+	ZN_TEST_ASSERT(voxel::PriorityDependency::get_lod_priority_band(0) >
+			voxel::PriorityDependency::get_lod_priority_band(1));
+	ZN_TEST_ASSERT(voxel::PriorityDependency::get_lod_priority_band(1) >
+			voxel::PriorityDependency::get_lod_priority_band(2));
+	ZN_TEST_ASSERT(voxel::PriorityDependency::get_lod_priority_band(254) >
+			voxel::PriorityDependency::get_lod_priority_band(255));
+	ZN_TEST_ASSERT(voxel::PriorityDependency::get_lod_priority_band(255) == 0);
 }
 
 // Simulates doing work in every chunk of a grid, where each task will want to access neighbors of each block. If any
