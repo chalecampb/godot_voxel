@@ -96,6 +96,20 @@ public:
 	const char *get_thread_debug_task_name(unsigned int thread_index) const;
 	unsigned int get_debug_remaining_tasks() const;
 
+	struct DebugStats {
+		uint64_t staged_sort_count = 0;
+		uint64_t staged_sorted_tasks = 0;
+		uint64_t staged_sort_usec = 0;
+		uint64_t merge_count = 0;
+		uint64_t merged_tasks = 0;
+		uint64_t merge_usec = 0;
+		uint64_t priority_sort_count = 0;
+		uint64_t priority_sorted_tasks = 0;
+		uint64_t priority_sort_usec = 0;
+	};
+
+	DebugStats get_and_reset_debug_stats();
+
 private:
 	static StdVector<IThreadedTask *> &get_completed_tasks_temp_tls();
 
@@ -172,6 +186,15 @@ private:
 	unsigned int _debug_received_tasks = 0;
 	unsigned int _debug_completed_tasks = 0;
 	unsigned int _debug_taken_out_tasks = 0;
+	std::atomic<uint64_t> _debug_staged_sort_count = { 0 };
+	std::atomic<uint64_t> _debug_staged_sorted_tasks = { 0 };
+	std::atomic<uint64_t> _debug_staged_sort_usec = { 0 };
+	std::atomic<uint64_t> _debug_merge_count = { 0 };
+	std::atomic<uint64_t> _debug_merged_tasks = { 0 };
+	std::atomic<uint64_t> _debug_merge_usec = { 0 };
+	std::atomic<uint64_t> _debug_priority_sort_count = { 0 };
+	std::atomic<uint64_t> _debug_priority_sorted_tasks = { 0 };
+	std::atomic<uint64_t> _debug_priority_sort_usec = { 0 };
 
 #ifdef ZN_THREADED_TASK_RUNNER_CHECK_DUPLICATE_TASKS
 	StdUnorderedMap<IThreadedTask *, StdString> _debug_owned_tasks;

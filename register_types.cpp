@@ -582,13 +582,13 @@ void uninitialize_voxel_module(ModuleInitializationLevel p_level) {
 		// users can write custom generators, which run inside threads, and these threads are hosted in the engine
 		// singleton... See https://github.com/Zylann/godot_voxel/issues/189
 
+		zylann::voxel::godot::VoxelEngine::destroy_singleton();
+		VoxelEngine::destroy_singleton();
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
 		VoxelMesherTransvoxel::free_static_resources();
 #endif
 		VoxelStringNames::destroy_singleton();
 		pg::NodeTypeDB::destroy_singleton();
-		zylann::voxel::godot::VoxelEngine::destroy_singleton();
-		VoxelEngine::destroy_singleton();
 
 		// Do this last as VoxelEngine might still be holding some refs to voxel blocks
 		VoxelMemoryPool::destroy_singleton();

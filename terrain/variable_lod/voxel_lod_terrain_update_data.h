@@ -239,6 +239,9 @@ struct VoxelLodTerrainUpdateData {
 		uint32_t time_io_requests = 0;
 		uint32_t time_mesh_requests = 0;
 		uint32_t time_total = 0;
+		uint32_t data_load_requests = 0;
+		uint32_t mesh_requests = 0;
+		uint32_t mesh_request_flushes = 0;
 	};
 
 	struct OctreeItem {

@@ -9,7 +9,6 @@
 #include "../../util/containers/container_funcs.h"
 #include "../../util/dstack.h"
 #include "../../util/godot/classes/engine.h"
-#include "../../util/godot/core/sort_array.h"
 #include "../../util/math/conv.h"
 #include "../../util/profiling.h"
 #include "../../util/profiling_clock.h"
@@ -55,6 +54,39 @@ void init_sparse_octree_priority_dependency(
 	);
 }
 
+float get_closest_viewer_distance_sq(
+		const Vector3f world_position,
+		const std::shared_ptr<PriorityDependency::ViewersData> &shared_viewers_data
+) {
+	const StdVector<Vector3f> &viewer_positions = shared_viewers_data->viewers;
+	const unsigned int viewer_count = shared_viewers_data->viewers_count;
+	ZN_ASSERT_RETURN_V(viewer_count <= viewer_positions.size(), math::length_squared(world_position));
+
+	if (viewer_count == 0) {
+		return math::length_squared(world_position);
+	}
+
+	float closest_distance_sq = math::distance_squared(viewer_positions[0], world_position);
+	for (unsigned int viewer_index = 1; viewer_index < viewer_count; ++viewer_index) {
+		closest_distance_sq = math::min(
+				closest_distance_sq, math::distance_squared(viewer_positions[viewer_index], world_position)
+		);
+	}
+	return closest_distance_sq;
+}
+
+struct DistanceSortItem {
+	unsigned int index;
+	uint16_t bucket;
+};
+
+uint16_t get_distance_sort_bucket(float closest_distance_sq, unsigned int lod_index, bool require_visual) {
+	const int distance = static_cast<int>(Math::sqrt(closest_distance_sq));
+	const uint16_t distance_bucket =
+			math::max(TaskPriority::BAND_MAX - math::arithmetic_rshift(distance, 4 + lod_index), 0);
+	return distance_bucket + (require_visual ? 256 : 0);
+}
+
 void sort_mesh_updates_by_viewer_distance(
 		StdVector<VoxelLodTerrainUpdateData::MeshToUpdate> &mesh_updates,
 		const unsigned int lod_index,
@@ -66,54 +98,103 @@ void sort_mesh_updates_by_viewer_distance(
 		return;
 	}
 
-	struct MeshUpdateWithPriority {
-		VoxelLodTerrainUpdateData::MeshToUpdate update;
-		float closest_distance_sq;
-	};
-
-	static thread_local StdVector<MeshUpdateWithPriority> tls_sorted_updates;
-	StdVector<MeshUpdateWithPriority> &sorted_updates = tls_sorted_updates;
+	static thread_local StdVector<DistanceSortItem> tls_sort_items;
+	static thread_local StdVector<VoxelLodTerrainUpdateData::MeshToUpdate> tls_sorted_updates;
+	StdVector<DistanceSortItem> &sort_items = tls_sort_items;
+	StdVector<VoxelLodTerrainUpdateData::MeshToUpdate> &sorted_updates = tls_sorted_updates;
+	sort_items.clear();
+	sort_items.resize(mesh_updates.size());
 	sorted_updates.clear();
 	sorted_updates.resize(mesh_updates.size());
-
-	const StdVector<Vector3f> &viewer_positions = shared_viewers_data->viewers;
-	const unsigned int viewer_count = shared_viewers_data->viewers_count;
-	ZN_ASSERT_RETURN(viewer_count <= viewer_positions.size());
 
 	for (unsigned int i = 0; i < mesh_updates.size(); ++i) {
 		const VoxelLodTerrainUpdateData::MeshToUpdate &mesh_update = mesh_updates[i];
 		const Vector3i voxel_pos = get_block_center(mesh_update.position, mesh_block_size, lod_index);
 		const Vector3f world_position = to_vec3f(volume_transform.xform(voxel_pos));
-
-		float closest_distance_sq;
-		if (viewer_count == 0) {
-			closest_distance_sq = math::length_squared(world_position);
-		} else {
-			closest_distance_sq = math::distance_squared(viewer_positions[0], world_position);
-			for (unsigned int viewer_index = 1; viewer_index < viewer_count; ++viewer_index) {
-				closest_distance_sq = math::min(
-						closest_distance_sq, math::distance_squared(viewer_positions[viewer_index], world_position)
-				);
-			}
-		}
-
-		sorted_updates[i] = MeshUpdateWithPriority{ mesh_update, closest_distance_sq };
+		sort_items[i] = DistanceSortItem{
+			i,
+			get_distance_sort_bucket(
+					get_closest_viewer_distance_sq(world_position, shared_viewers_data),
+					lod_index,
+					mesh_update.require_visual
+			)
+		};
 	}
 
-	struct MeshUpdateComparator {
-		inline bool operator()(const MeshUpdateWithPriority &a, const MeshUpdateWithPriority &b) const {
-			if (a.update.require_visual != b.update.require_visual) {
-				return a.update.require_visual;
-			}
-			return a.closest_distance_sq < b.closest_distance_sq;
-		}
-	};
+	static const unsigned int BUCKET_COUNT = 512;
+	unsigned int bucket_counts[BUCKET_COUNT] = {};
+	for (const DistanceSortItem &item : sort_items) {
+		++bucket_counts[item.bucket];
+	}
 
-	SortArray<MeshUpdateWithPriority, MeshUpdateComparator> sorter;
-	sorter.sort(sorted_updates.data(), sorted_updates.size());
+	unsigned int bucket_offsets[BUCKET_COUNT] = {};
+	for (int bucket_index = BUCKET_COUNT - 2; bucket_index >= 0; --bucket_index) {
+		bucket_offsets[bucket_index] = bucket_offsets[bucket_index + 1] + bucket_counts[bucket_index + 1];
+	}
+	unsigned int bucket_cursors[BUCKET_COUNT] = {};
+	for (unsigned int i = 0; i < BUCKET_COUNT; ++i) {
+		bucket_cursors[i] = bucket_offsets[i];
+	}
+	for (const DistanceSortItem &item : sort_items) {
+		sorted_updates[bucket_cursors[item.bucket]] = mesh_updates[item.index];
+		++bucket_cursors[item.bucket];
+	}
+	for (unsigned int i = 0; i < mesh_updates.size(); ++i) {
+		mesh_updates[i] = sorted_updates[i];
+	}
+}
 
-	for (unsigned int i = 0; i < sorted_updates.size(); ++i) {
-		mesh_updates[i] = sorted_updates[i].update;
+void sort_data_loads_by_viewer_distance(
+		StdVector<VoxelLodTerrainUpdateData::BlockToLoad> &blocks_to_load,
+		const unsigned int data_block_size,
+		const std::shared_ptr<PriorityDependency::ViewersData> &shared_viewers_data,
+		const Transform3D &volume_transform
+) {
+	if (blocks_to_load.size() < 2) {
+		return;
+	}
+
+	static thread_local StdVector<DistanceSortItem> tls_sort_items;
+	static thread_local StdVector<VoxelLodTerrainUpdateData::BlockToLoad> tls_sorted_loads;
+	StdVector<DistanceSortItem> &sort_items = tls_sort_items;
+	StdVector<VoxelLodTerrainUpdateData::BlockToLoad> &sorted_loads = tls_sorted_loads;
+	sort_items.clear();
+	sort_items.resize(blocks_to_load.size());
+	sorted_loads.clear();
+	sorted_loads.resize(blocks_to_load.size());
+
+	for (unsigned int i = 0; i < blocks_to_load.size(); ++i) {
+		const VoxelLodTerrainUpdateData::BlockToLoad &block_to_load = blocks_to_load[i];
+		const Vector3i voxel_pos = get_block_center(block_to_load.loc.position, data_block_size, block_to_load.loc.lod);
+		const Vector3f world_position = to_vec3f(volume_transform.xform(voxel_pos));
+		sort_items[i] = DistanceSortItem{
+			i,
+			get_distance_sort_bucket(
+					get_closest_viewer_distance_sq(world_position, shared_viewers_data), block_to_load.loc.lod, true
+			)
+		};
+	}
+
+	static const unsigned int BUCKET_COUNT = 512;
+	unsigned int bucket_counts[BUCKET_COUNT] = {};
+	for (const DistanceSortItem &item : sort_items) {
+		++bucket_counts[item.bucket];
+	}
+
+	unsigned int bucket_offsets[BUCKET_COUNT] = {};
+	for (int bucket_index = BUCKET_COUNT - 2; bucket_index >= 0; --bucket_index) {
+		bucket_offsets[bucket_index] = bucket_offsets[bucket_index + 1] + bucket_counts[bucket_index + 1];
+	}
+	unsigned int bucket_cursors[BUCKET_COUNT] = {};
+	for (unsigned int i = 0; i < BUCKET_COUNT; ++i) {
+		bucket_cursors[i] = bucket_offsets[i];
+	}
+	for (const DistanceSortItem &item : sort_items) {
+		sorted_loads[bucket_cursors[item.bucket]] = blocks_to_load[item.index];
+		++bucket_cursors[item.bucket];
+	}
+	for (unsigned int i = 0; i < blocks_to_load.size(); ++i) {
+		blocks_to_load[i] = sorted_loads[i];
 	}
 }
 
@@ -452,12 +533,14 @@ void send_mesh_requests(
 
 			task_scheduler.push_main_task(task);
 			++pushed_since_flush;
+			++state.stats.mesh_requests;
 
 			mesh_block.state = VoxelLodTerrainUpdateData::MESH_UPDATE_SENT;
 			mesh_block.update_list_index = -1;
 
 			if (pushed_since_flush >= FLUSH_BATCH_SIZE) {
 				task_scheduler.flush();
+				++state.stats.mesh_request_flushes;
 				pushed_since_flush = 0;
 			}
 		}
@@ -1034,6 +1117,9 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 		);
 	}
 	state.stats.time_detect_required_blocks = profiling_clock.restart();
+	state.stats.data_load_requests = data_blocks_to_load.size();
+	state.stats.mesh_requests = 0;
+	state.stats.mesh_request_flushes = 0;
 
 	BufferedTaskScheduler &task_scheduler = BufferedTaskScheduler::get_for_current_thread();
 
@@ -1058,6 +1144,10 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 			// This part would still "work" without that check because `data_blocks_to_load` would be empty,
 			// but I added this for expliciteness
 			if (data.is_streaming_enabled()) {
+				sort_data_loads_by_viewer_distance(
+						data_blocks_to_load, data_block_size, _shared_viewers_data, _volume_transform
+				);
+
 				if (stream.is_null() && !settings.cache_generated_blocks) {
 					// TODO Optimization: not ideal because a bit delayed. It requires a second update cycle for meshes
 					// to get requested. We could instead set those empty blocks right away instead of putting them in
@@ -1114,6 +1204,18 @@ void VoxelLodTerrainUpdateTask::run(ThreadedTaskContext &ctx) {
 	state.stats.time_mesh_requests = profiling_clock.restart();
 
 	state.stats.time_total = profiling_clock.restart();
+	if (state.stats.time_total > 100000 || state.stats.data_load_requests > 10000 || state.stats.mesh_requests > 10000) {
+		ZN_PRINT_VERBOSE(format(
+				"VLT update: total={}us detect={}us io={}us mesh_req={}us data_loads={} mesh_reqs={} mesh_flushes={}",
+				state.stats.time_total,
+				state.stats.time_detect_required_blocks,
+				state.stats.time_io_requests,
+				state.stats.time_mesh_requests,
+				state.stats.data_load_requests,
+				state.stats.mesh_requests,
+				state.stats.mesh_request_flushes
+		));
+	}
 }
 
 } // namespace zylann::voxel

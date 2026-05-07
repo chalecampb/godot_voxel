@@ -10,6 +10,7 @@
 #include "../util/godot/classes/rd_sampler_state.h"
 #include "../util/godot/classes/rendering_device.h"
 #include "../util/godot/classes/rendering_server.h"
+#include "../util/godot/classes/time.h"
 #include "../util/io/log.h"
 #include "../util/macros.h"
 #include "../util/math/conv.h"
@@ -310,10 +311,42 @@ void VoxelEngine::process() {
 	);
 
 	// Receive generation and meshing results
-	_general_thread_pool.dequeue_completed_tasks([](zylann::IThreadedTask *task) {
+	unsigned int completed_threaded_tasks = 0;
+	_general_thread_pool.dequeue_completed_tasks([&completed_threaded_tasks](zylann::IThreadedTask *task) {
 		task->apply_result();
 		ZN_DELETE(task);
+		++completed_threaded_tasks;
 	});
+	static uint64_t s_last_threaded_task_log_time_ms = 0;
+	static unsigned int s_completed_threaded_tasks_since_log = 0;
+	s_completed_threaded_tasks_since_log += completed_threaded_tasks;
+	const uint64_t now_ms = Time::get_singleton()->get_ticks_msec();
+	if (now_ms - s_last_threaded_task_log_time_ms > 1000) {
+		const unsigned int pending_tasks = _general_thread_pool.get_debug_remaining_tasks();
+		const ThreadedTaskRunner::DebugStats task_stats = _general_thread_pool.get_and_reset_debug_stats();
+		if (pending_tasks > 0 || s_completed_threaded_tasks_since_log > 0 || task_stats.staged_sort_count > 0 ||
+				task_stats.merge_count > 0 || task_stats.priority_sort_count > 0) {
+			ZN_PRINT_VERBOSE(format(
+					"Voxel tasks: completed={} pending={} generate={} mesh={} stream={} staged_sorts={}/{} {}us merges={}/{} {}us queue_sorts={}/{} {}us",
+					s_completed_threaded_tasks_since_log,
+					pending_tasks,
+					_debug_generate_block_task_count.load(),
+					MeshBlockTask::debug_get_running_count(),
+					LoadBlockDataTask::debug_get_running_count() + SaveBlockDataTask::debug_get_running_count(),
+					task_stats.staged_sort_count,
+					task_stats.staged_sorted_tasks,
+					task_stats.staged_sort_usec,
+					task_stats.merge_count,
+					task_stats.merged_tasks,
+					task_stats.merge_usec,
+					task_stats.priority_sort_count,
+					task_stats.priority_sorted_tasks,
+					task_stats.priority_sort_usec
+			));
+		}
+		s_last_threaded_task_log_time_ms = now_ms;
+		s_completed_threaded_tasks_since_log = 0;
+	}
 
 	// Run this after dequeueing threaded tasks, because they can add some to this runner,
 	// which could in turn complete right away (we avoid 1-frame delays this way).

@@ -1,6 +1,7 @@
 #include "threaded_task_runner.h"
 #include "../dstack.h"
 #include "../godot/classes/time.h"
+#include "../math/funcs.h"
 #include "../profiling.h"
 #include "../string/format.h"
 
@@ -99,6 +100,20 @@ void ThreadedTaskRunner::set_thread_count(uint32_t count) {
 
 void ThreadedTaskRunner::set_priority_update_period(uint32_t milliseconds) {
 	_priority_update_period_ms = milliseconds;
+}
+
+ThreadedTaskRunner::DebugStats ThreadedTaskRunner::get_and_reset_debug_stats() {
+	DebugStats stats;
+	stats.staged_sort_count = _debug_staged_sort_count.exchange(0);
+	stats.staged_sorted_tasks = _debug_staged_sorted_tasks.exchange(0);
+	stats.staged_sort_usec = _debug_staged_sort_usec.exchange(0);
+	stats.merge_count = _debug_merge_count.exchange(0);
+	stats.merged_tasks = _debug_merged_tasks.exchange(0);
+	stats.merge_usec = _debug_merge_usec.exchange(0);
+	stats.priority_sort_count = _debug_priority_sort_count.exchange(0);
+	stats.priority_sorted_tasks = _debug_priority_sorted_tasks.exchange(0);
+	stats.priority_sort_usec = _debug_priority_sort_usec.exchange(0);
+	return stats;
 }
 
 void ThreadedTaskRunner::enqueue(IThreadedTask *task, bool serial) {
@@ -215,6 +230,8 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 
 			if (staged_tasks.size() > 0) {
 				ZN_PROFILE_SCOPE_NAMED("Prioritize staged tasks");
+				const uint64_t sort_begin_usec = Time::get_singleton()->get_ticks_usec();
+				const uint64_t staged_task_count = staged_tasks.size();
 
 				for (unsigned int i = 0; i < staged_tasks.size();) {
 					TaskItem &item = staged_tasks[i];
@@ -232,6 +249,10 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 
 				SortArray<TaskItem, TaskComparator> sorter;
 				sorter.sort(staged_tasks.data(), staged_tasks.size());
+
+				_debug_staged_sort_count.fetch_add(1);
+				_debug_staged_sorted_tasks.fetch_add(staged_task_count);
+				_debug_staged_sort_usec.fetch_add(Time::get_singleton()->get_ticks_usec() - sort_begin_usec);
 			}
 
 			{
@@ -245,6 +266,8 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 						_tasks.swap(staged_tasks);
 
 					} else {
+						const uint64_t merge_begin_usec = Time::get_singleton()->get_ticks_usec();
+						const uint64_t merged_task_count = _tasks.size() + staged_tasks.size();
 						StdVector<TaskItem> merged_tasks;
 						merged_tasks.resize(_tasks.size() + staged_tasks.size());
 
@@ -275,6 +298,9 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 						}
 
 						_tasks.swap(merged_tasks);
+						_debug_merge_count.fetch_add(1);
+						_debug_merged_tasks.fetch_add(merged_task_count);
+						_debug_merge_usec.fetch_add(Time::get_singleton()->get_ticks_usec() - merge_begin_usec);
 					}
 					staged_tasks.clear();
 				}
@@ -287,8 +313,16 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 					// priority location can change. Some tasks can even become irrelevant before they are run,so we
 					// may remove them from the list so they don't slow down the process.
 					const uint64_t now = Time::get_singleton()->get_ticks_msec();
-					if (now - _last_priority_update_time_ms > _priority_update_period_ms) {
+					uint32_t priority_update_period_ms = _priority_update_period_ms;
+					if (_tasks.size() > 65536) {
+						priority_update_period_ms = math::max(priority_update_period_ms, 5000U);
+					} else if (_tasks.size() > 16384) {
+						priority_update_period_ms = math::max(priority_update_period_ms, 2000U);
+					}
+					if (now - _last_priority_update_time_ms > priority_update_period_ms) {
 						ZN_PROFILE_SCOPE_NAMED("Sorting");
+						const uint64_t sort_begin_usec = Time::get_singleton()->get_ticks_usec();
+						const uint64_t sorted_task_count = _tasks.size();
 
 						{
 							ZN_PROFILE_SCOPE_NAMED("Update priorities");
@@ -311,6 +345,9 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 						sorter.sort(_tasks.data(), _tasks.size());
 
 						_last_priority_update_time_ms = Time::get_singleton()->get_ticks_msec();
+						_debug_priority_sort_count.fetch_add(1);
+						_debug_priority_sorted_tasks.fetch_add(sorted_task_count);
+						_debug_priority_sort_usec.fetch_add(Time::get_singleton()->get_ticks_usec() - sort_begin_usec);
 					}
 
 					// Pick task with highest priority if possible

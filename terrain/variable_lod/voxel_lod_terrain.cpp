@@ -1676,6 +1676,9 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 	_stats.time_io_requests = state.stats.time_io_requests;
 	_stats.time_mesh_requests = state.stats.time_mesh_requests;
 	_stats.time_update_task = state.stats.time_total;
+	_stats.data_load_requests = state.stats.data_load_requests;
+	_stats.mesh_requests = state.stats.mesh_requests;
+	_stats.mesh_request_flushes = state.stats.mesh_request_flushes;
 }
 
 void VoxelLodTerrain::apply_data_block_response(VoxelEngine::BlockDataOutput &ob) {
@@ -2657,6 +2660,9 @@ Dictionary VoxelLodTerrain::_b_get_statistics() const {
 	d["time_io_requests"] = _stats.time_io_requests;
 	d["time_mesh_requests"] = _stats.time_mesh_requests;
 	d["time_update_task"] = _stats.time_update_task;
+	d["data_load_requests"] = _stats.data_load_requests;
+	d["mesh_requests"] = _stats.mesh_requests;
+	d["mesh_request_flushes"] = _stats.mesh_request_flushes;
 	d["blocked_lods"] = _stats.blocked_lods;
 
 	// Process

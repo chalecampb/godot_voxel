@@ -192,6 +192,9 @@ public:
 		// Total time spent in the last update task, in microseconds.
 		// This only includes the threadable part, not the whole `process` function.
 		uint32_t time_update_task = 0;
+		uint32_t data_load_requests = 0;
+		uint32_t mesh_requests = 0;
+		uint32_t mesh_request_flushes = 0;
 	};
 
 	const Stats &get_stats() const;

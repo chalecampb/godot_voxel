@@ -53,3 +53,8 @@ This summarizes the clipbox improvement cherry-picked from `sgn_remake` and the 
 | `send_mesh_requests()` nearest-first ordering | Sorts pending mesh requests inside each LOD by visible requirement first, then closest viewer distance, so new mesh areas do not populate evenly by clipbox traversal order. |
 | `send_mesh_requests()` batch flushes | Flushes mesh tasks every 64 requests, allowing worker threads to begin meshing while the update task continues preparing later requests. |
 | `VoxelLodTerrainUpdateTask::run()` IO flush before meshing | Starts queued load/generation/save work before mesh request preparation, keeping the worker pool fed earlier in the update cycle. |
+| `sort_data_loads_by_viewer_distance()` | Orders pending data loads by nearest viewer distance before dispatch, so generation and streaming feed nearby mesh work first instead of following clipbox traversal order. |
+| Linear distance buckets for mesh/data dispatch | Replaces full comparison sort in the update task with bounded priority buckets, preserving near-first order without spending O(n log n) time on huge request lists. |
+| Adaptive full queue priority refresh | Keeps immediate priority sorting for newly staged tasks, but backs off repeated full queued-task resorts when the backlog is very large so workers spend more time executing tasks. |
+| `Voxel tasks:` verbose aggregate log | Adds once-per-second task throughput diagnostics with pending/completed counts and aggregate staged-sort, merge, and full queue-sort timings. |
+| `VLT update:` verbose aggregate log | Logs expensive update cycles with total, detection, IO request, mesh request, data-load, mesh-request, and flush counts without logging inside inner loops. |
