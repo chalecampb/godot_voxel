@@ -2815,4 +2815,54 @@ void test_voxel_graph_script_node_port_refresh() {
 	ZN_TEST_ASSERT(src.port_index == 0);
 }
 
+void test_voxel_graph_script_node_copy_keeps_connections_after_reload() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_constant = g.create_node(VoxelGraphFunction::NODE_CONSTANT);
+	const uint32_t n_sgn = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_constant, 0, 2.f);
+	g.set_node_param(n_sgn, 0, script_node);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.add_connection(n_constant, 0, n_sgn, 1);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	StdVector<uint32_t> copied_node_ids;
+	copied_node_ids.push_back(n_x);
+	copied_node_ids.push_back(n_constant);
+	copied_node_ids.push_back(n_sgn);
+	copied_node_ids.push_back(n_out);
+
+	Ref<VoxelGraphFunction> copy;
+	copy.instantiate();
+	g.duplicate_subgraph(to_span(copied_node_ids), Span<const uint32_t>(), **copy, Vector2());
+
+	Ref<VoxelGraphFunction> loaded_copy;
+	loaded_copy.instantiate();
+	ZN_TEST_ASSERT(loaded_copy->load_graph_from_variant_data(copy->get_graph_as_variant_data()));
+
+	PackedInt32Array pasted_node_ids = loaded_copy->get_node_ids();
+	uint32_t pasted_sgn_id = ProgramGraph::NULL_ID;
+	for (int i = 0; i < pasted_node_ids.size(); ++i) {
+		const uint32_t node_id = pasted_node_ids[i];
+		if (loaded_copy->get_node_type_id(node_id) == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			pasted_sgn_id = node_id;
+			break;
+		}
+	}
+	ZN_TEST_ASSERT(pasted_sgn_id != ProgramGraph::NULL_ID);
+
+	unsigned int bias_input_index;
+	ZN_TEST_ASSERT(loaded_copy->get_node_input_index_by_name(pasted_sgn_id, "bias", bias_input_index));
+
+	ProgramGraph::PortLocation src;
+	ZN_TEST_ASSERT(loaded_copy->try_get_connection_to({ pasted_sgn_id, 0 }, src));
+	ZN_TEST_ASSERT(loaded_copy->try_get_connection_to({ pasted_sgn_id, bias_input_index }, src));
+	ZN_TEST_ASSERT(loaded_copy->get_node_type_id(src.node_id) == VoxelGraphFunction::NODE_CONSTANT);
+}
+
 } // namespace zylann::voxel::tests

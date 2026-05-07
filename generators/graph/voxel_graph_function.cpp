@@ -2190,9 +2190,8 @@ void VoxelGraphFunction::duplicate_subgraph(
 	for (const uint32_t node_id : original_node_ids) {
 		const ProgramGraph::Node *original_src_node = _graph.try_get_node(node_id);
 
-		for (const ProgramGraph::Port &port : original_src_node->inputs) {
-			unsigned int dst_port_index = 0;
-
+		for (unsigned int dst_port_index = 0; dst_port_index < original_src_node->inputs.size(); ++dst_port_index) {
+			const ProgramGraph::Port &port = original_src_node->inputs[dst_port_index];
 			for (const ProgramGraph::PortLocation loc : port.connections) {
 				size_t copied_src_node_index;
 
@@ -2203,8 +2202,6 @@ void VoxelGraphFunction::duplicate_subgraph(
 
 					dst_graph.add_connection(copied_src_node_id, loc.port_index, copied_dst_node_id, dst_port_index);
 				}
-
-				++dst_port_index;
 			}
 		}
 

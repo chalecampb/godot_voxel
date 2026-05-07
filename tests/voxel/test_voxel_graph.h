@@ -50,6 +50,7 @@ void test_voxel_graph_get_io_indices();
 void test_voxel_graph_script_node_contract();
 void test_voxel_graph_script_node_cpu_execution();
 void test_voxel_graph_script_node_port_refresh();
+void test_voxel_graph_script_node_copy_keeps_connections_after_reload();
 
 } // namespace zylann::voxel::tests
 
