@@ -444,9 +444,7 @@ void add_loading_block(
 
 void unreference_data_block_from_loading_lists(
 		StdUnorderedMap<Vector3i, VoxelLodTerrainUpdateData::LoadingDataBlock> &loading_blocks,
-		StdVector<VoxelLodTerrainUpdateData::BlockToLoad> &data_blocks_to_load,
-		Vector3i bpos,
-		unsigned int lod_index
+		Vector3i bpos
 ) {
 	auto loading_block_it = loading_blocks.find(bpos);
 	if (loading_block_it == loading_blocks.end()) {
@@ -467,18 +465,6 @@ void unreference_data_block_from_loading_lists(
 		}
 
 		loading_blocks.erase(loading_block_it);
-
-		// Also remove from blocks about to be added to the loading queue
-		VoxelLodTerrainUpdateData::BlockLocation bloc{ bpos, static_cast<uint8_t>(lod_index) };
-		for (size_t i = 0; i < data_blocks_to_load.size(); ++i) {
-			if (data_blocks_to_load[i].loc == bloc) {
-				data_blocks_to_load[i] = data_blocks_to_load.back();
-				data_blocks_to_load.pop_back();
-				// We don't touch the cancellation token since tasks haven't been spawned yet for
-				// these
-				break;
-			}
-		}
 	}
 }
 
@@ -611,9 +597,7 @@ void process_data_blocks_sliding_box(
 					if (tls_missing_blocks.size() > 0) {
 						MutexLock mlock(lod.loading_blocks_mutex);
 						for (const Vector3i bpos : tls_missing_blocks) {
-							unreference_data_block_from_loading_lists(
-									lod.loading_blocks, data_blocks_to_load, bpos, lod_index
-							);
+							unreference_data_block_from_loading_lists(lod.loading_blocks, bpos);
 						}
 					}
 				}
@@ -658,6 +642,21 @@ void process_data_blocks_sliding_box(
 
 		} // for each lod
 	} // for each viewer
+
+	if (data_blocks_to_load.size() > 0) {
+		size_t dst_i = 0;
+		for (size_t src_i = 0; src_i < data_blocks_to_load.size(); ++src_i) {
+			const VoxelLodTerrainUpdateData::BlockToLoad &btl = data_blocks_to_load[src_i];
+			if (btl.cancellation_token.is_valid() && btl.cancellation_token.is_cancelled()) {
+				continue;
+			}
+			if (dst_i != src_i) {
+				data_blocks_to_load[dst_i] = data_blocks_to_load[src_i];
+			}
+			++dst_i;
+		}
+		data_blocks_to_load.resize(dst_i);
+	}
 
 	// state.clipbox_streaming.lod_distance_in_data_chunks_previous_update = lod_distance_in_data_chunks;
 }
