@@ -1,4 +1,8 @@
 #include "../node_type_db.h"
+#include "../voxel_graph_script_node.h"
+#include "../../../util/containers/std_unordered_map.h"
+#include "../../../util/thread/mutex.h"
+#include "../../../util/thread/thread.h"
 
 namespace zylann::voxel::pg {
 
@@ -8,6 +12,43 @@ inline float select(float a, float b, float threshold, float t) {
 
 void register_misc_nodes(Span<NodeType> types) {
 	using namespace math;
+
+	struct L {
+		static Variant create_script_graph_node_resource() {
+			Ref<VoxelGraphScriptNode> res;
+			res.instantiate();
+			return Variant(res);
+		}
+	};
+
+	struct ScriptGraphNodeRuntimeData {
+		Ref<VoxelGraphScriptNode> script_node;
+		Mutex mutex;
+		StdUnorderedMap<Thread::ID, Ref<VoxelGraphScriptNode>> thread_nodes;
+
+		Ref<VoxelGraphScriptNode> get_thread_node() {
+			const Thread::ID thread_id = Thread::get_caller_id();
+			MutexLock lock(mutex);
+			auto it = thread_nodes.find(thread_id);
+			if (it != thread_nodes.end()) {
+				return it->second;
+			}
+
+			Ref<Resource> duplicate = script_node->duplicate();
+			Ref<VoxelGraphScriptNode> thread_node = duplicate;
+			if (thread_node.is_null()) {
+				thread_node = script_node;
+			}
+			thread_nodes.insert({ thread_id, thread_node });
+			return thread_node;
+		}
+	};
+
+	struct ScriptGraphNodeParams {
+		ScriptGraphNodeRuntimeData *runtime_data;
+		uint32_t input_count;
+		uint32_t output_count;
+	};
 
 	{
 		NodeType &t = types[VoxelGraphFunction::NODE_CONSTANT];
@@ -45,6 +86,100 @@ void register_misc_nodes(Span<NodeType> types) {
 
 		t.debug_only = false;
 		t.is_pseudo_node = true;
+	}
+	{
+		NodeType &t = types[VoxelGraphFunction::NODE_SCRIPT_GRAPH];
+		t.name = "ScriptGraphNode";
+		t.category = CATEGORY_FUNCTIONS;
+
+		NodeType::Param node_param(
+				"script_node", VoxelGraphScriptNode::get_class_static(), &L::create_script_graph_node_resource
+		);
+		node_param.hidden = true;
+		t.params.push_back(node_param);
+
+		t.compile_func = [](CompileContext &ctx) {
+			Ref<VoxelGraphScriptNode> script_node = ctx.get_param(0);
+			if (script_node.is_null()) {
+				ctx.make_error(ZN_TTR("ScriptGraphNode has no VoxelGraphScriptNode resource assigned."));
+				return;
+			}
+			if (script_node->get_script_path().is_empty()) {
+				ctx.make_error(ZN_TTR("ScriptGraphNode has no GDScript assigned."));
+				return;
+			}
+			if (!script_node->validate()) {
+				PackedStringArray errors = script_node->get_validation_errors();
+				if (errors.size() > 0) {
+					ctx.make_error(errors[0]);
+				} else {
+					ctx.make_error(ZN_TTR("ScriptGraphNode contract is invalid."));
+				}
+				return;
+			}
+			ScriptGraphNodeRuntimeData *runtime_data = ZN_NEW(ScriptGraphNodeRuntimeData);
+			runtime_data->script_node = script_node;
+			ctx.add_delete_cleanup(runtime_data);
+
+			ctx.set_params(ScriptGraphNodeParams{ runtime_data,
+					static_cast<uint32_t>(script_node->get_input_ports().size()),
+					static_cast<uint32_t>(script_node->get_output_ports().size()) });
+		};
+
+		t.process_buffer_func = [](Runtime::ProcessBufferContext &ctx) {
+			const ScriptGraphNodeParams &params = ctx.get_params<ScriptGraphNodeParams>();
+			ZN_ASSERT_RETURN(params.runtime_data != nullptr);
+			Ref<VoxelGraphScriptNode> script_node = params.runtime_data->get_thread_node();
+			ZN_ASSERT_RETURN(script_node.is_valid());
+
+			const Span<const Ref<VoxelGraphScriptNodePort>> input_ports = script_node->get_input_ports();
+			const Span<const Ref<VoxelGraphScriptNodePort>> output_ports = script_node->get_output_ports();
+			ZN_ASSERT_RETURN(input_ports.size() == params.input_count);
+			ZN_ASSERT_RETURN(output_ports.size() == params.output_count);
+
+			Dictionary inputs;
+			Dictionary outputs;
+			for (uint32_t output_index = 0; output_index < params.output_count; ++output_index) {
+				const Ref<VoxelGraphScriptNodePort> &port = output_ports[output_index];
+				if (port.is_valid()) {
+					outputs[port->get_port_name()] = 0.f;
+				}
+			}
+
+			const uint32_t buffer_size = params.output_count > 0 ? ctx.get_output(0).size : 0;
+			for (uint32_t buffer_index = 0; buffer_index < buffer_size; ++buffer_index) {
+				for (uint32_t input_index = 0; input_index < params.input_count; ++input_index) {
+					const Ref<VoxelGraphScriptNodePort> &port = input_ports[input_index];
+					if (port.is_valid()) {
+						const Runtime::Buffer &input = ctx.get_input(input_index);
+						inputs[port->get_port_name()] =
+								input.is_constant ? input.constant_value : input.data[buffer_index];
+					}
+				}
+
+				script_node->generate(inputs, outputs);
+
+				for (uint32_t output_index = 0; output_index < params.output_count; ++output_index) {
+					const Ref<VoxelGraphScriptNodePort> &port = output_ports[output_index];
+					if (port.is_valid()) {
+						Runtime::Buffer &output = ctx.get_output(output_index);
+						output.data[buffer_index] = outputs.get(port->get_port_name(), 0.f).operator float();
+					}
+				}
+			}
+		};
+
+		t.range_analysis_func = [](Runtime::RangeAnalysisContext &ctx) {
+			const ScriptGraphNodeParams &params = ctx.get_params<ScriptGraphNodeParams>();
+			for (uint32_t output_index = 0; output_index < params.output_count; ++output_index) {
+				ctx.set_output(output_index, math::Interval::from_infinity());
+			}
+		};
+
+		t.debug_only = false;
+		t.is_pseudo_node = false;
+		t.layout_depends_on_params = true;
+		t.fit_content_after_layout_update = true;
 	}
 	{
 		struct Params {

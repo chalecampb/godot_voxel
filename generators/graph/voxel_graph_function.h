@@ -4,6 +4,7 @@
 #include "../../engine/gpu/compute_shader_resource.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/classes/resource.h"
+#include "../../util/godot/core/packed_arrays.h"
 #include "../../util/string/std_string.h"
 #include "../../util/thread/mutex.h"
 #include "program_graph.h"
@@ -98,6 +99,7 @@ public:
 		NODE_RELAY,
 		NODE_SPOTS_2D,
 		NODE_SPOTS_3D,
+		NODE_SCRIPT_GRAPH,
 
 	// Optional features down (to avoid diffs in docs when building both versions)
 	// Keep in mind this enum's values should not be used in persistent context (saves)
@@ -182,6 +184,7 @@ public:
 
 	void set_node_name(uint32_t node_id, StringName p_name);
 	StringName get_node_name(uint32_t node_id) const;
+	String get_node_subtitle(uint32_t node_id) const;
 	uint32_t find_node_by_name(StringName p_name) const;
 
 	Variant get_node_param(uint32_t node_id, int param_index) const;
@@ -273,6 +276,12 @@ public:
 	bool get_node_param_index_by_name(uint32_t node_id, String param_name, unsigned int &out_param_index) const;
 
 	void update_function_nodes(StdVector<ProgramGraph::Connection> *removed_connections);
+	void update_script_graph_nodes(StdVector<ProgramGraph::Connection> *removed_connections);
+	void refresh_script_graph_node(uint32_t node_id);
+	void refresh_script_graph_nodes();
+	void refresh_script_graph_nodes_from_paths(PackedStringArray paths, PackedInt32Array *out_updated_node_ids);
+	bool does_node_layout_depend_on_params(uint32_t node_id) const;
+	bool should_node_fit_content_after_layout_update(uint32_t node_id) const;
 
 	// Copies nodes into another graph, and connections between them only.
 	// Resources in node parameters will be duplicated if they don't have a file path.

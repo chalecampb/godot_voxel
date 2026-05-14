@@ -82,6 +82,10 @@ struct NodeType {
 	bool debug_only = false;
 	// Pseudo nodes are replaced during compilation with one or multiple real nodes, they have no logic on their own
 	bool is_pseudo_node = false;
+	// True when editing node parameters can change the visible port layout.
+	bool layout_depends_on_params = false;
+	// True when rebuilding the layout should shrink-wrap the node to its new minimum size.
+	bool fit_content_after_layout_update = false;
 	Category category;
 	StdVector<Port> inputs;
 	StdVector<Port> outputs;
