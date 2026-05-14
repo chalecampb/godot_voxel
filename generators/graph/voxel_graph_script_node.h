@@ -112,7 +112,8 @@ private:
 	static void _bind_methods();
 
 	void validate_metadata();
-	void validate_gdscript();
+	bool validate(bool refresh_metadata_from_script);
+	void validate_gdscript(bool refresh_metadata_from_script);
 	void validate_glsl();
 	void copy_contract_from_script_instance(const VoxelGraphScriptNode &script_instance);
 	StdVector<NamedType> get_exported_parameters_from_property_list();

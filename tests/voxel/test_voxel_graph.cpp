@@ -1,4 +1,5 @@
 #include "test_voxel_graph.h"
+#include "../../constants/voxel_string_names.h"
 #include "../../generators/graph/curve_utility.h"
 #include "../../generators/graph/image_range_grid.h"
 #include "../../generators/graph/image_utility.h"
@@ -22,6 +23,7 @@
 #include "../../util/string/std_string.h"
 #include "../../util/testing/test_macros.h"
 #include "test_util.h"
+#include "core/object/callable_method_pointer.h"
 #include <sstream>
 
 #ifdef VOXEL_ENABLE_FAST_NOISE_2
@@ -2707,6 +2709,15 @@ namespace {
 const char *SGN_TEST_SCRIPT_PATH = "user://sgn_test_node.gd";
 const char *SGN_TEST_SHADER_PATH = "user://sgn_test_node.glsl";
 
+class SignalCounter : public Object {
+public:
+	void increment() {
+		++count;
+	}
+
+	int count = 0;
+};
+
 bool write_text_file(String path, String text) {
 	Ref<FileAccess> file = FileAccess::open(path, FileAccess::WRITE);
 	ZN_TEST_ASSERT(file.is_valid());
@@ -2936,6 +2947,41 @@ void test_voxel_graph_script_node_cpu_execution() {
 	);
 	ZN_TEST_ASSERT(
 			Math::is_equal_approx(generator->generate_single(Vector3i(-2, 0, 0), VoxelBuffer::CHANNEL_SDF).f, -3.5f)
+	);
+}
+
+void test_voxel_graph_script_node_debug_compile_does_not_emit_changed() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	g.clear();
+
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = create_test_script_graph_node(g, script_node);
+	const uint32_t n_preview = g.create_node(VoxelGraphFunction::NODE_SDF_PREVIEW);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 1.5f);
+	g.add_connection(n_sgn, 0, n_preview, 0);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	SignalCounter changed_counter;
+	graph->connect(VoxelStringNames::get_singleton().changed, callable_mp(&changed_counter, &SignalCounter::increment));
+
+	script_node->set_parameter_value("gain", 2.5f);
+	changed_counter.count = 0;
+
+	pg::CompilationResult result = generator->compile(true);
+	ZN_TEST_ASSERT_MSG(
+			result.success,
+			String("Failed to compile graph: {0}: {1}").format(varray(result.node_id, result.message))
+	);
+	ZN_TEST_ASSERT_MSG(
+			changed_counter.count == 0,
+			"Debug compilation for previews must not emit graph `changed`, or preview refreshes can reschedule themselves."
 	);
 }
 

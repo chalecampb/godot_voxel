@@ -1052,14 +1052,6 @@ void reset_modulates(GraphEdit &graph_edit) {
 
 void VoxelGraphEditor::update_previews(bool with_live_update) {
 	ZN_ASSERT_RETURN(_graph.is_valid());
-	ERR_FAIL_COND(_updating_previews);
-	_updating_previews = true;
-	struct PreviewUpdateGuard {
-		bool &updating_previews;
-		~PreviewUpdateGuard() {
-			updating_previews = false;
-		}
-	} preview_update_scope{ _updating_previews };
 
 	clear_range_analysis_tooltips();
 	hide_profiling_ratios();
@@ -1260,11 +1252,6 @@ void VoxelGraphEditor::schedule_preview_update() {
 }
 
 void VoxelGraphEditor::_on_graph_changed() {
-	if (_updating_previews) {
-		// Preview updates compile the graph, and compilation can emit `changed` from subresources. Ignore it so
-		// refreshing previews does not schedule another refresh of itself.
-		return;
-	}
 	schedule_preview_update();
 	if (_graph.is_valid() && _graph_edit != nullptr) {
 		PackedInt32Array node_ids = _graph->get_node_ids();

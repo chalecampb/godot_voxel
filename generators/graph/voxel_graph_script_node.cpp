@@ -356,7 +356,7 @@ bool VoxelGraphScriptNode::reload_script_contract(String script_path) {
 	set_script(script);
 	copy_contract_from_script_instance(**script_node_instance);
 	increment_revision();
-	validate();
+	validate(true);
 	_has_deferred_change_notification = true;
 	set_change_notifications_suppressed(false);
 	return _valid;
@@ -375,9 +375,11 @@ bool VoxelGraphScriptNode::reload_attached_script() {
 }
 
 void VoxelGraphScriptNode::refresh_metadata() {
+	set_change_notifications_suppressed(true);
 	increment_revision();
-	validate();
-	emit_changed_deferred();
+	validate(true);
+	_has_deferred_change_notification = true;
+	set_change_notifications_suppressed(false);
 }
 
 void VoxelGraphScriptNode::set_shader_path(String path) {
@@ -763,7 +765,7 @@ void VoxelGraphScriptNode::sync_parameters_from_gdscript_contract(const StdVecto
 	register_child_resources();
 }
 
-void VoxelGraphScriptNode::validate_gdscript() {
+void VoxelGraphScriptNode::validate_gdscript(bool refresh_metadata_from_script) {
 	Ref<Script> script = get_script();
 	if (script.is_null()) {
 		if (!_script_path.is_empty()) {
@@ -785,7 +787,9 @@ void VoxelGraphScriptNode::validate_gdscript() {
 #endif
 
 	StdVector<NamedType> exports = get_exported_parameters_from_property_list();
-	sync_parameters_from_gdscript_contract(exports);
+	if (refresh_metadata_from_script) {
+		sync_parameters_from_gdscript_contract(exports);
+	}
 	validate_name_matches(to_span(exports), to_span(_parameters), "GDScript export", true);
 }
 
@@ -891,6 +895,10 @@ void VoxelGraphScriptNode::validate_glsl() {
 }
 
 bool VoxelGraphScriptNode::validate() {
+	return validate(false);
+}
+
+bool VoxelGraphScriptNode::validate(bool refresh_metadata_from_script) {
 	if (_validated_revision == _revision) {
 		return _valid;
 	}
@@ -902,7 +910,7 @@ bool VoxelGraphScriptNode::validate() {
 		_gpu_compatible = false;
 		return false;
 	}
-	validate_gdscript();
+	validate_gdscript(refresh_metadata_from_script);
 	if (_errors.size() > 0) {
 		return false;
 	}
@@ -954,7 +962,7 @@ void VoxelGraphScriptNode::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_parameters"), &Self::get_parameters);
 	ClassDB::bind_method(D_METHOD("set_parameter_value", "name", "value"), &Self::set_parameter_value);
 	ClassDB::bind_method(D_METHOD("get_parameter_value", "name"), &Self::get_parameter_value);
-	ClassDB::bind_method(D_METHOD("validate"), &Self::validate);
+	ClassDB::bind_method(D_METHOD("validate"), static_cast<bool (Self::*)()>(&Self::validate));
 	ClassDB::bind_method(D_METHOD("get_validation_errors"), &Self::get_validation_errors);
 	ClassDB::bind_method(D_METHOD("get_validation_warnings"), &Self::get_validation_warnings);
 	ClassDB::bind_method(D_METHOD("is_valid"), &Self::is_valid);

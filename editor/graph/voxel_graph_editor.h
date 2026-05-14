@@ -156,7 +156,6 @@ private:
 	EditorUndoRedoManager *_undo_redo = nullptr;
 	Vector2 _click_position;
 	bool _nothing_selected_check_scheduled = false;
-	bool _updating_previews = false;
 	float _time_before_preview_update = 0.f;
 	zylann::godot::ObjectWeakRef<VoxelNode> _terrain_node;
 	zylann::godot::DebugRenderer _debug_renderer;
