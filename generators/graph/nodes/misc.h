@@ -19,6 +19,26 @@ void register_misc_nodes(Span<NodeType> types) {
 			res.instantiate();
 			return Variant(res);
 		}
+
+		static void update_layout(
+				ProgramGraph &graph,
+				uint32_t node_id,
+				StdVector<ProgramGraph::Connection> *removed_connections
+		) {
+			ProgramGraph::Node &node = graph.get_node(node_id);
+			ZN_ASSERT(node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+			ZN_ASSERT_RETURN(node.params.size() >= 1);
+			Ref<VoxelGraphScriptNode> script_node = node.params[0];
+			if (script_node.is_null()) {
+				node.inputs.clear();
+				node.outputs.clear();
+				node.default_inputs.clear();
+				node.autoconnect_default_inputs = false;
+				return;
+			}
+			script_node->update_graph_node_layout(graph, node_id, removed_connections);
+		}
+
 	};
 
 	struct ScriptGraphNodeRuntimeData {
@@ -180,6 +200,7 @@ void register_misc_nodes(Span<NodeType> types) {
 		t.is_pseudo_node = false;
 		t.layout_depends_on_params = true;
 		t.fit_content_after_layout_update = true;
+		t.update_node_layout_func = &L::update_layout;
 	}
 	{
 		struct Params {

@@ -56,6 +56,9 @@ void test_voxel_graph_script_node_cpu_execution();
 void test_voxel_graph_script_node_debug_compile_does_not_emit_changed();
 void test_voxel_graph_script_node_port_refresh();
 void test_voxel_graph_script_node_copy_keeps_connections_after_reload();
+#ifdef TOOLS_ENABLED
+void test_voxel_graph_editor_create_dynamic_layout_node();
+#endif
 
 } // namespace zylann::voxel::tests
 

@@ -9,6 +9,7 @@
 #include "../../util/godot/core/packed_string_array.h"
 #include "../../util/godot/core/typed_array.h"
 #include "../../util/godot/core/variant.h"
+#include "program_graph.h"
 
 namespace zylann::voxel::pg {
 
@@ -64,6 +65,11 @@ public:
 	bool reload_attached_script();
 	bool reload_script_contract(String path);
 	void refresh_metadata();
+	void update_graph_node_layout(
+			ProgramGraph &graph,
+			uint32_t node_id,
+			StdVector<ProgramGraph::Connection> *removed_connections
+	);
 
 	void set_shader_path(String path);
 	String get_shader_path() const;
@@ -115,6 +121,7 @@ private:
 	bool validate(bool refresh_metadata_from_script);
 	void validate_gdscript(bool refresh_metadata_from_script);
 	void validate_glsl();
+	void apply_graph_node_layout(ProgramGraph::Node &node);
 	void copy_contract_from_script_instance(const VoxelGraphScriptNode &script_instance);
 	StdVector<NamedType> get_exported_parameters_from_property_list();
 	void sync_parameters_from_gdscript_contract(const StdVector<NamedType> &parameters);

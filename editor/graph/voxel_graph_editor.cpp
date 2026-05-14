@@ -402,6 +402,12 @@ inline String node_to_gui_name(uint32_t node_id) {
 	return String("{0}").format(varray(node_id));
 }
 
+bool has_node_gui(GraphEdit &graph_edit, uint32_t node_id) {
+	const String node_name = node_to_gui_name(node_id);
+	return graph_edit.has_node(node_name) &&
+			Object::cast_to<VoxelGraphEditorNode>(graph_edit.get_node(NodePath(node_name))) != nullptr;
+}
+
 void VoxelGraphEditor::build_gui_from_graph() {
 	// Rebuild the entire graph GUI
 
@@ -1257,7 +1263,7 @@ void VoxelGraphEditor::_on_graph_changed() {
 		PackedInt32Array node_ids = _graph->get_node_ids();
 		for (int i = 0; i < node_ids.size(); ++i) {
 			const uint32_t node_id = node_ids[i];
-			if (_graph->does_node_layout_depend_on_params(node_id)) {
+			if (_graph->does_node_layout_depend_on_params(node_id) && has_node_gui(*_graph_edit, node_id)) {
 				update_node_layout(node_id);
 			}
 		}

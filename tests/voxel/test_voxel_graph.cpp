@@ -24,6 +24,10 @@
 #include "../../util/testing/test_macros.h"
 #include "test_util.h"
 #include "core/object/callable_method_pointer.h"
+#ifdef TOOLS_ENABLED
+#include "../../editor/graph/voxel_graph_editor.h"
+#include "../../../../tests/test_tools.h"
+#endif
 #include <sstream>
 
 #ifdef VOXEL_ENABLE_FAST_NOISE_2
@@ -2768,7 +2772,6 @@ uint32_t create_test_script_graph_node(VoxelGraphFunction &graph, Ref<VoxelGraph
 	const uint32_t node_id = graph.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
 	ZN_TEST_ASSERT(node_id != ProgramGraph::NULL_ID);
 	graph.set_node_param(node_id, 0, script_node);
-	graph.refresh_script_graph_node(node_id);
 	return node_id;
 }
 
@@ -2822,7 +2825,7 @@ void test_voxel_graph_sgn_clear_script_reverts_ports() {
 	ZN_TEST_ASSERT(graph->get_node_output_count(n_sgn) == 1);
 
 	script_node->set_script_path(String());
-	graph->refresh_script_graph_node(n_sgn);
+	graph->refresh_node_layout(n_sgn);
 
 	ZN_TEST_ASSERT(script_node->get_script_path().is_empty());
 	ZN_TEST_ASSERT(script_node->get_attached_script().get_type() == Variant::NIL);
@@ -3002,7 +3005,7 @@ void test_voxel_graph_script_node_port_refresh() {
 	script_node->clear_inputs();
 	script_node->add_input("bias");
 	script_node->add_input("x");
-	g.refresh_script_graph_node(n_sgn);
+	g.refresh_node_layout(n_sgn);
 
 	ZN_TEST_ASSERT(g.get_node_input_count(n_sgn) == 2);
 	ZN_TEST_ASSERT(g.get_node_input_index(n_sgn, "bias") == 0);
@@ -3068,5 +3071,36 @@ void test_voxel_graph_script_node_copy_keeps_connections_after_reload() {
 	ZN_TEST_ASSERT(loaded_copy->try_get_connection_to({ pasted_sgn_id, bias_input_index }, src));
 	ZN_TEST_ASSERT(loaded_copy->get_node_type_id(src.node_id) == VoxelGraphFunction::NODE_CONSTANT);
 }
+
+#ifdef TOOLS_ENABLED
+void test_voxel_graph_editor_create_dynamic_layout_node() {
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+
+	VoxelGraphEditor *editor = memnew(VoxelGraphEditor);
+	editor->set_graph(graph);
+
+	ErrorDetector error_detector;
+
+	const uint32_t first_node_id = graph->create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	ZN_TEST_ASSERT(first_node_id != ProgramGraph::NULL_ID);
+	ZN_TEST_ASSERT(!error_detector.has_error);
+
+	editor->call("create_node_gui", first_node_id);
+	graph->remove_node(first_node_id);
+	editor->call("remove_node_gui", StringName(String::num_uint64(first_node_id)));
+
+	error_detector.clear();
+	const uint32_t second_node_id = graph->create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	ZN_TEST_ASSERT(second_node_id != ProgramGraph::NULL_ID);
+	ZN_TEST_ASSERT(!error_detector.has_error);
+
+	editor->call("create_node_gui", second_node_id);
+	graph->remove_node(second_node_id);
+	editor->call("remove_node_gui", StringName(String::num_uint64(second_node_id)));
+
+	memdelete(editor);
+}
+#endif
 
 } // namespace zylann::voxel::tests

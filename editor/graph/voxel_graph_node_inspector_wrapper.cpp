@@ -288,6 +288,9 @@ void update_expression_inputs(
 bool VoxelGraphNodeInspectorWrapper::_set(const StringName &p_name, const Variant &p_value) {
 	Ref<VoxelGraphFunction> graph = get_graph();
 	ERR_FAIL_COND_V(graph.is_null(), false);
+	if (!graph->has_node(_node_id)) {
+		return false;
+	}
 	ERR_FAIL_COND_V(_graph_editor == nullptr, false);
 	// We cannot keep a reference to UndoRedo in our object because our object can be referenced by UndoRedo, which
 	// would cause a cyclic reference. So we access it from a weak reference to the editor.
@@ -305,8 +308,8 @@ bool VoxelGraphNodeInspectorWrapper::_set(const StringName &p_name, const Varian
 		ur.force_fixed_history();
 		ur.add_do_property(custom_node.ptr(), VoxelGraphScriptNode::SGN_SCRIPT_PROPERTY_NAME, p_value);
 		ur.add_undo_property(custom_node.ptr(), VoxelGraphScriptNode::SGN_SCRIPT_PROPERTY_NAME, previous_script);
-		ur.add_do_method(graph.ptr(), "refresh_script_graph_node", _node_id);
-		ur.add_undo_method(graph.ptr(), "refresh_script_graph_node", _node_id);
+		ur.add_do_method(graph.ptr(), "refresh_node_layout", _node_id);
+		ur.add_undo_method(graph.ptr(), "refresh_node_layout", _node_id);
 		ur.add_do_method(_graph_editor, "update_node_layout", _node_id);
 		ur.add_undo_method(_graph_editor, "update_node_layout", _node_id);
 		ur.add_do_method(this, "notify_property_list_changed");
@@ -356,8 +359,8 @@ bool VoxelGraphNodeInspectorWrapper::_set(const StringName &p_name, const Varian
 		ur.create_action("Set ScriptGraphNode parameter");
 		ur.add_do_method(custom_node.ptr(), "set_parameter_value", custom_parameter->get_parameter_name(), p_value);
 		ur.add_undo_method(custom_node.ptr(), "set_parameter_value", custom_parameter->get_parameter_name(), previous_value);
-		ur.add_do_method(graph.ptr(), "refresh_script_graph_node", _node_id);
-		ur.add_undo_method(graph.ptr(), "refresh_script_graph_node", _node_id);
+		ur.add_do_method(graph.ptr(), "refresh_node_layout", _node_id);
+		ur.add_undo_method(graph.ptr(), "refresh_node_layout", _node_id);
 		ur.add_do_method(_graph_editor, "update_node_layout", _node_id);
 		ur.add_undo_method(_graph_editor, "update_node_layout", _node_id);
 		ur.commit_action();
@@ -413,6 +416,9 @@ bool VoxelGraphNodeInspectorWrapper::_set(const StringName &p_name, const Varian
 bool VoxelGraphNodeInspectorWrapper::_get(const StringName &p_name, Variant &r_ret) const {
 	Ref<VoxelGraphFunction> graph = get_graph();
 	ERR_FAIL_COND_V(graph.is_null(), false);
+	if (!graph->has_node(_node_id)) {
+		return false;
+	}
 
 	const String name = p_name;
 

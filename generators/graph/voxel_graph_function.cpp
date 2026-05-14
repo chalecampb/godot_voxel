@@ -216,159 +216,25 @@ void setup_function(ProgramGraph::Node &node, Ref<VoxelGraphFunction> func) {
 	// TODO Function parameters
 }
 
-void setup_script_graph_node(ProgramGraph::Node &node, Ref<VoxelGraphScriptNode> script_node) {
-	ZN_ASSERT(node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH);
-	ZN_ASSERT(script_node.is_valid());
-	ZN_ASSERT(node.params.size() >= 1);
-	node.params.resize(1);
-	node.params[0] = script_node;
-	if (script_node->get_script_path().is_empty()) {
-		node.inputs.clear();
-		node.outputs.clear();
-		node.default_inputs.clear();
-		node.autoconnect_default_inputs = false;
-		return;
-	}
-	if (!script_node->validate()) {
-		PackedStringArray errors = script_node->get_validation_errors();
-		for (int i = 0; i < errors.size(); ++i) {
-			ERR_PRINT(errors[i]);
-		}
-		node.inputs.clear();
-		node.outputs.clear();
-		node.default_inputs.clear();
-		node.autoconnect_default_inputs = false;
-		return;
-	}
-
-	auto set_ports = [](StdVector<ProgramGraph::Port> &ports, Span<const Ref<VoxelGraphScriptNodePort>> script_ports) {
-		ports.clear();
-		for (const Ref<VoxelGraphScriptNodePort> &script_port : script_ports) {
-			ProgramGraph::Port port;
-			if (script_port.is_valid()) {
-				const CharString name_utf8 = script_port->get_port_name().utf8();
-				port.dynamic_name = name_utf8.get_data();
-			}
-			ports.push_back(port);
-		}
-	};
-
-	set_ports(node.inputs, script_node->get_input_ports());
-	set_ports(node.outputs, script_node->get_output_ports());
-	node.default_inputs.resize(node.inputs.size());
-	const Span<const Ref<VoxelGraphScriptNodePort>> input_ports = script_node->get_input_ports();
-	for (unsigned int i = 0; i < node.default_inputs.size(); ++i) {
-		if (i < input_ports.size() && input_ports[i].is_valid()) {
-			node.default_inputs[i] = input_ports[i]->get_default_value();
-		} else {
-			node.default_inputs[i] = 0.f;
-		}
-	}
-	node.autoconnect_default_inputs = false;
-}
-
-namespace {
-
-StdString get_dynamic_port_name(const ProgramGraph::Port &port) {
-	return port.dynamic_name;
-}
-
-} // namespace
-
-void VoxelGraphFunction::update_script_graph_nodes(StdVector<ProgramGraph::Connection> *removed_connections) {
-	StdVector<uint32_t> node_ids;
-	_graph.for_each_node_id([this, &node_ids](uint32_t node_id) {
-		const ProgramGraph::Node &node = _graph.get_node(node_id);
-		if (node.type_id == NODE_SCRIPT_GRAPH) {
-			node_ids.push_back(node_id);
-		}
-	});
-
-	for (uint32_t node_id : node_ids) {
-		ProgramGraph::Node &node = _graph.get_node(node_id);
-		ZN_ASSERT_CONTINUE(node.params.size() >= 1);
-		Ref<VoxelGraphScriptNode> script_node = node.params[0];
-		ZN_ASSERT_CONTINUE(script_node.is_valid());
-
-		struct InputConnection {
-			StdString name;
-			ProgramGraph::PortLocation src;
-			bool connected = false;
-		};
-		struct OutputConnection {
-			StdString name;
-			ProgramGraph::PortLocation dst;
-		};
-
-		StdVector<InputConnection> old_inputs;
-		for (uint32_t input_index = 0; input_index < node.inputs.size(); ++input_index) {
-			InputConnection input;
-			input.name = get_dynamic_port_name(node.inputs[input_index]);
-			if (node.inputs[input_index].connections.size() > 0) {
-				ZN_ASSERT(node.inputs[input_index].connections.size() == 1);
-				input.src = node.inputs[input_index].connections[0];
-				input.connected = true;
-				_graph.disconnect(input.src, { node_id, input_index });
-				if (removed_connections != nullptr) {
-					removed_connections->push_back({ input.src, { node_id, input_index } });
-				}
-			}
-			old_inputs.push_back(input);
-		}
-
-		StdVector<OutputConnection> old_outputs;
-		for (uint32_t output_index = 0; output_index < node.outputs.size(); ++output_index) {
-			const StdString output_name = get_dynamic_port_name(node.outputs[output_index]);
-			const StdVector<ProgramGraph::PortLocation> destinations = node.outputs[output_index].connections;
-			for (ProgramGraph::PortLocation dst : destinations) {
-				_graph.disconnect({ node_id, output_index }, dst);
-				if (removed_connections != nullptr) {
-					removed_connections->push_back({ { node_id, output_index }, dst });
-				}
-				old_outputs.push_back({ output_name, dst });
-			}
-		}
-
-		setup_script_graph_node(node, script_node);
-
-		for (uint32_t input_index = 0; input_index < node.inputs.size(); ++input_index) {
-			const StdString input_name = get_dynamic_port_name(node.inputs[input_index]);
-			for (const InputConnection &old_input : old_inputs) {
-				if (old_input.name == input_name) {
-					if (old_input.connected && _graph.is_output_port_valid(old_input.src) &&
-							_graph.can_connect(old_input.src, { node_id, input_index })) {
-						_graph.connect(old_input.src, { node_id, input_index });
-					}
-					break;
-				}
-			}
-		}
-
-		for (uint32_t output_index = 0; output_index < node.outputs.size(); ++output_index) {
-			const StdString output_name = get_dynamic_port_name(node.outputs[output_index]);
-			for (const OutputConnection &old_output : old_outputs) {
-				if (old_output.name == output_name && _graph.is_input_port_valid(old_output.dst) &&
-						_graph.can_connect({ node_id, output_index }, old_output.dst)) {
-					_graph.connect({ node_id, output_index }, old_output.dst);
-				}
-			}
-		}
-	}
-}
-
-void VoxelGraphFunction::refresh_script_graph_node(uint32_t node_id) {
+bool VoxelGraphFunction::update_node_layout(
+		uint32_t node_id,
+		StdVector<ProgramGraph::Connection> *removed_connections
+) {
 	ProgramGraph::Node *node = _graph.try_get_node(node_id);
-	ERR_FAIL_COND(node == nullptr);
-	ERR_FAIL_COND(node->type_id != NODE_SCRIPT_GRAPH);
-	ERR_FAIL_COND(node->params.size() < 1);
+	ERR_FAIL_COND_V(node == nullptr, false);
+	const NodeType &node_type = NodeTypeDB::get_singleton().get_type(node->type_id);
+	if (node_type.update_node_layout_func == nullptr) {
+		return false;
+	}
 
-	update_script_graph_nodes(nullptr);
-	emit_changed();
+	node_type.update_node_layout_func(_graph, node_id, removed_connections);
+	return true;
 }
 
-void VoxelGraphFunction::refresh_script_graph_nodes() {
-	update_script_graph_nodes(nullptr);
-	emit_changed();
+void VoxelGraphFunction::refresh_node_layout(uint32_t node_id) {
+	if (update_node_layout(node_id, nullptr)) {
+		emit_changed();
+	}
 }
 
 bool VoxelGraphFunction::does_node_layout_depend_on_params(uint32_t node_id) const {
@@ -753,22 +619,6 @@ void VoxelGraphFunction::set_node_param_unchecked(
 		setup_function(node, func);
 		register_subresource(**func);
 
-	} else if (node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH && param_index == 0) {
-		Ref<VoxelGraphScriptNode> script_node = value;
-		ERR_FAIL_COND_MSG(script_node.is_null(), "A ScriptGraphNode with a null VoxelGraphScriptNode reference is not allowed");
-
-		for (unsigned int i = 0; i < node.params.size(); ++i) {
-			Ref<Resource> res = node.params[i];
-			if (res.is_valid()) {
-				unregister_subresource(**res);
-			}
-		}
-
-		node.params.resize(1);
-		node.params[0] = script_node;
-		update_script_graph_nodes(nullptr);
-		register_subresource(**script_node);
-
 	} else {
 		Ref<Resource> prev_resource = node.params[param_index];
 		if (prev_resource.is_valid()) {
@@ -780,6 +630,11 @@ void VoxelGraphFunction::set_node_param_unchecked(
 		Ref<Resource> resource = value;
 		if (resource.is_valid()) {
 			register_subresource(**resource);
+		}
+
+		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(node.type_id);
+		if (node_type.update_node_layout_func != nullptr && node_type.layout_depends_on_params) {
+			update_node_layout(node.id, nullptr);
 		}
 	}
 
@@ -1550,7 +1405,11 @@ bool load_graph_from_variant_data(ProgramGraph &graph, Dictionary data, String r
 				return false;
 			}
 			recover_script_graph_port_names_from_graph_data(script_node_resource, node_data);
-			setup_script_graph_node(*node, script_node_resource);
+			node->params.resize(1);
+			node->params[0] = script_node_resource;
+			const NodeType &node_type = type_db.get_type(node->type_id);
+			ZN_ASSERT(node_type.update_node_layout_func != nullptr);
+			node_type.update_node_layout_func(graph, id, nullptr);
 		}
 
 		Variant auto_connect_v = node_data.get("auto_connect", Variant());
@@ -1696,16 +1555,12 @@ void VoxelGraphFunction::get_node_input_info(
 				*out_name = "<error>";
 			}
 
+		} else if (port.dynamic_name.empty()) {
+			const NodeType &type = NodeTypeDB::get_singleton().get_type(node.type_id);
+			ZN_ASSERT(input_index < type.inputs.size());
+			*out_name = type.inputs[input_index].name;
 		} else {
-			if (node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
-				*out_name = port.dynamic_name.empty() ? String("<unnamed>") : godot::to_godot(port.dynamic_name);
-			} else if (port.dynamic_name.empty()) {
-				const NodeType &type = NodeTypeDB::get_singleton().get_type(node.type_id);
-				ZN_ASSERT(input_index < type.inputs.size());
-				*out_name = type.inputs[input_index].name;
-			} else {
-				*out_name = godot::to_godot(port.dynamic_name);
-			}
+			*out_name = godot::to_godot(port.dynamic_name);
 		}
 	}
 
@@ -1735,16 +1590,12 @@ String VoxelGraphFunction::get_node_output_name(uint32_t node_id, unsigned int o
 			return "<error>";
 		}
 
+	} else if (port.dynamic_name.empty()) {
+		const NodeType &type = NodeTypeDB::get_singleton().get_type(node.type_id);
+		ZN_ASSERT(output_index < type.outputs.size());
+		return type.outputs[output_index].name;
 	} else {
-		if (node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
-			return port.dynamic_name.empty() ? String("<unnamed>") : godot::to_godot(port.dynamic_name);
-		} else if (port.dynamic_name.empty()) {
-			const NodeType &type = NodeTypeDB::get_singleton().get_type(node.type_id);
-			ZN_ASSERT(output_index < type.outputs.size());
-			return type.outputs[output_index].name;
-		} else {
-			return godot::to_godot(port.dynamic_name);
-		}
+		return godot::to_godot(port.dynamic_name);
 	}
 }
 
@@ -1901,7 +1752,11 @@ bool VoxelGraphFunction::get_node_input_index_by_name(
 		String input_name,
 		unsigned int &out_input_index
 ) const {
-	const ProgramGraph::Node &node = _graph.get_node(node_id);
+	const ProgramGraph::Node *node_ptr = _graph.try_get_node(node_id);
+	if (node_ptr == nullptr) {
+		return false;
+	}
+	const ProgramGraph::Node &node = *node_ptr;
 
 	if (node.type_id == VoxelGraphFunction::NODE_FUNCTION) {
 		ZN_ASSERT(node.params.size() >= 1);
@@ -1931,9 +1786,12 @@ bool VoxelGraphFunction::get_node_param_index_by_name(
 		String param_name,
 		unsigned int &out_param_index
 ) const {
-	const ProgramGraph::Node &node = _graph.get_node(node_id);
+	const ProgramGraph::Node *node = _graph.try_get_node(node_id);
+	if (node == nullptr) {
+		return false;
+	}
 	const NodeTypeDB &type_db = NodeTypeDB::get_singleton();
-	return type_db.try_get_param_index_from_name(node.type_id, param_name, out_param_index);
+	return type_db.try_get_param_index_from_name(node->type_id, param_name, out_param_index);
 }
 
 void VoxelGraphFunction::update_function_nodes(StdVector<ProgramGraph::Connection> *removed_connections) {
@@ -2456,8 +2314,7 @@ void VoxelGraphFunction::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_node_name", "node_id"), &Self::get_node_name);
 	ClassDB::bind_method(D_METHOD("set_node_name", "node_id", "name"), &Self::set_node_name);
 	ClassDB::bind_method(D_METHOD("set_expression_node_inputs", "node_id", "names"), &Self::set_expression_node_inputs);
-	ClassDB::bind_method(D_METHOD("refresh_script_graph_node", "node_id"), &Self::refresh_script_graph_node);
-	ClassDB::bind_method(D_METHOD("refresh_script_graph_nodes"), &Self::refresh_script_graph_nodes);
+	ClassDB::bind_method(D_METHOD("refresh_node_layout", "node_id"), &Self::refresh_node_layout);
 
 	ClassDB::bind_method(D_METHOD("get_node_type_count"), &Self::_b_get_node_type_count);
 	ClassDB::bind_method(D_METHOD("get_node_type_info", "type_id"), &Self::_b_get_node_type_info);

@@ -4,8 +4,10 @@
 #include "../../util/containers/std_unordered_map.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/core/string.h" // For String hash
+#include "../../util/godot/core/packed_arrays.h"
 #include "../../util/string/expression_parser.h"
 #include "../../util/string/std_string.h"
+#include "program_graph.h"
 #include "voxel_graph_compiler.h"
 #include "voxel_graph_function.h"
 #include "voxel_graph_shader_generator.h"
@@ -100,6 +102,12 @@ struct NodeType {
 	// The Expression node can invoke the logic of other nodes, but it then needs a specific implementation
 	ExpressionParser::FunctionCallback expression_func = nullptr;
 	ShaderGenFunc shader_gen_func = nullptr;
+	typedef void (*UpdateNodeLayoutFunc)(
+			ProgramGraph &graph,
+			uint32_t node_id,
+			StdVector<ProgramGraph::Connection> *removed_connections
+	);
+	UpdateNodeLayoutFunc update_node_layout_func = nullptr;
 
 	inline bool has_autoconnect_inputs() const {
 		for (const Port &port : inputs) {

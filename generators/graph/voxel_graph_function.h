@@ -276,9 +276,8 @@ public:
 	bool get_node_param_index_by_name(uint32_t node_id, String param_name, unsigned int &out_param_index) const;
 
 	void update_function_nodes(StdVector<ProgramGraph::Connection> *removed_connections);
-	void update_script_graph_nodes(StdVector<ProgramGraph::Connection> *removed_connections);
-	void refresh_script_graph_node(uint32_t node_id);
-	void refresh_script_graph_nodes();
+	bool update_node_layout(uint32_t node_id, StdVector<ProgramGraph::Connection> *removed_connections);
+	void refresh_node_layout(uint32_t node_id);
 	bool does_node_layout_depend_on_params(uint32_t node_id) const;
 	bool should_node_fit_content_after_layout_update(uint32_t node_id) const;
 

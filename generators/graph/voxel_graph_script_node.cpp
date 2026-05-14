@@ -106,6 +106,10 @@ void push_required_name_error(PackedStringArray &errors, const String &kind, con
 	}
 }
 
+StdString get_dynamic_port_name(const ProgramGraph::Port &port) {
+	return port.dynamic_name;
+}
+
 } // namespace
 
 String VoxelGraphScriptNodePort::get_port_name() const {
@@ -220,6 +224,130 @@ void VoxelGraphScriptNode::register_child_resources() {
 			parameter->connect(changed, callable);
 		}
 	}
+}
+
+void VoxelGraphScriptNode::update_graph_node_layout(
+		ProgramGraph &graph,
+		uint32_t node_id,
+		StdVector<ProgramGraph::Connection> *removed_connections
+) {
+	ProgramGraph::Node &node = graph.get_node(node_id);
+
+	struct InputConnection {
+		StdString name;
+		ProgramGraph::PortLocation src;
+		bool connected = false;
+	};
+	struct OutputConnection {
+		StdString name;
+		ProgramGraph::PortLocation dst;
+	};
+
+	StdVector<InputConnection> old_inputs;
+	for (uint32_t input_index = 0; input_index < node.inputs.size(); ++input_index) {
+		InputConnection input;
+		input.name = get_dynamic_port_name(node.inputs[input_index]);
+		if (node.inputs[input_index].connections.size() > 0) {
+			ZN_ASSERT(node.inputs[input_index].connections.size() == 1);
+			input.src = node.inputs[input_index].connections[0];
+			input.connected = true;
+			graph.disconnect(input.src, { node_id, input_index });
+			if (removed_connections != nullptr) {
+				removed_connections->push_back({ input.src, { node_id, input_index } });
+			}
+		}
+		old_inputs.push_back(input);
+	}
+
+	StdVector<OutputConnection> old_outputs;
+	for (uint32_t output_index = 0; output_index < node.outputs.size(); ++output_index) {
+		const StdString output_name = get_dynamic_port_name(node.outputs[output_index]);
+		const StdVector<ProgramGraph::PortLocation> destinations = node.outputs[output_index].connections;
+		for (ProgramGraph::PortLocation dst : destinations) {
+			graph.disconnect({ node_id, output_index }, dst);
+			if (removed_connections != nullptr) {
+				removed_connections->push_back({ { node_id, output_index }, dst });
+			}
+			old_outputs.push_back({ output_name, dst });
+		}
+	}
+
+	apply_graph_node_layout(node);
+
+	for (uint32_t input_index = 0; input_index < node.inputs.size(); ++input_index) {
+		const StdString input_name = get_dynamic_port_name(node.inputs[input_index]);
+		for (const InputConnection &old_input : old_inputs) {
+			if (old_input.name == input_name) {
+				if (old_input.connected && graph.is_output_port_valid(old_input.src) &&
+						graph.can_connect(old_input.src, { node_id, input_index })) {
+					graph.connect(old_input.src, { node_id, input_index });
+				}
+				break;
+			}
+		}
+	}
+
+	for (uint32_t output_index = 0; output_index < node.outputs.size(); ++output_index) {
+		const StdString output_name = get_dynamic_port_name(node.outputs[output_index]);
+		for (const OutputConnection &old_output : old_outputs) {
+			if (old_output.name == output_name && graph.is_input_port_valid(old_output.dst) &&
+					graph.can_connect({ node_id, output_index }, old_output.dst)) {
+				graph.connect({ node_id, output_index }, old_output.dst);
+			}
+		}
+	}
+}
+
+void VoxelGraphScriptNode::apply_graph_node_layout(ProgramGraph::Node &node) {
+	if (get_script_path().is_empty()) {
+		node.inputs.clear();
+		node.outputs.clear();
+		node.default_inputs.clear();
+		node.autoconnect_default_inputs = false;
+		return;
+	}
+	if (!validate()) {
+		PackedStringArray errors = get_validation_errors();
+		for (int i = 0; i < errors.size(); ++i) {
+			ERR_PRINT(errors[i]);
+		}
+		node.inputs.clear();
+		node.outputs.clear();
+		node.default_inputs.clear();
+		node.autoconnect_default_inputs = false;
+		return;
+	}
+
+	auto set_ports = [](StdVector<ProgramGraph::Port> &ports, Span<const Ref<VoxelGraphScriptNodePort>> script_ports) {
+		ports.clear();
+		for (const Ref<VoxelGraphScriptNodePort> &script_port : script_ports) {
+			ProgramGraph::Port port;
+			if (script_port.is_valid()) {
+				String name = script_port->get_port_name();
+				if (name.is_empty()) {
+					name = "<unnamed>";
+				}
+				const CharString name_utf8 = name.utf8();
+				port.dynamic_name = name_utf8.get_data();
+			} else {
+				port.dynamic_name = "<unnamed>";
+			}
+			ports.push_back(port);
+		}
+	};
+
+	set_ports(node.inputs, get_input_ports());
+	set_ports(node.outputs, get_output_ports());
+	node.default_inputs.resize(node.inputs.size());
+	const Span<const Ref<VoxelGraphScriptNodePort>> input_ports = get_input_ports();
+	for (unsigned int i = 0; i < node.default_inputs.size(); ++i) {
+		if (i < input_ports.size() && input_ports[i].is_valid()) {
+			node.default_inputs[i] = input_ports[i]->get_default_value();
+		} else {
+			node.default_inputs[i] = 0.f;
+		}
+	}
+	node.autoconnect_default_inputs = false;
 }
 
 void VoxelGraphScriptNode::unregister_child_resources() {
