@@ -179,6 +179,14 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_voxel_graph_broad_block);
 	VOXEL_TEST(test_voxel_graph_set_default_input_by_name);
 	VOXEL_TEST(test_voxel_graph_get_io_indices);
+	VOXEL_TEST(test_voxel_graph_sgn_load_script_contract);
+	VOXEL_TEST(test_voxel_graph_sgn_clear_script_reverts_ports);
+	VOXEL_TEST(test_voxel_graph_sgn_shader_path_property);
+	VOXEL_TEST(test_voxel_graph_sgn_shader_compilation);
+	VOXEL_TEST(test_voxel_graph_script_node_contract);
+	VOXEL_TEST(test_voxel_graph_script_node_cpu_execution);
+	VOXEL_TEST(test_voxel_graph_script_node_port_refresh);
+	VOXEL_TEST(test_voxel_graph_script_node_copy_keeps_connections_after_reload);
 
 	print_line("------------ Voxel tests end -------------");
 }

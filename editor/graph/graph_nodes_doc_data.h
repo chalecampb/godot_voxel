@@ -8,7 +8,7 @@ struct Node {
     const char *description;
 };
 
-static const unsigned int COUNT = 59;
+static const unsigned int COUNT = 60;
 static const Node g_data[COUNT] = {
     {"Abs", "Math", "If [code]x[/code] is negative, returns [code]x[/code] as a positive number. Otherwise, returns [code]x[/code]."},
     {"Add", "Ops", "Returns the sum of [code]a[/code] and [code]b[/code]"},
@@ -61,6 +61,7 @@ static const Node g_data[COUNT] = {
     {"SdfSphereHeightmap", "SDF", "Returns an approximation of the signed distance field of a spherical heightmap, at coordinates [code](x, y, z)[/code]. The heightmap is an [code]image[/code] using panoramic projection, similar to those used for environment sky in Godot. The radius of the sphere is specified with [code]radius[/code]. The heights from the heightmap can be scaled using the [code]factor[/code] parameter. The image must use an uncompressed format."},
     {"SdfTorus", "SDF", "Returns the signed distance field of a torus centered at the origin, facing the Y axis, at coordinates [code](x, y, z)[/code]. The radius of the ring is [code]radius1[/code], and its thickness is [code]radius2[/code]."},
     {"Select", "Math", "If [code]t[/code] is lower than [code]threshold[/code], returns [code]a[/code]. Otherwise, returns [code]b[/code]. "},
+    {"ScriptGraphNode", "Misc", "Runs a custom [url=VoxelGraphScriptNode]VoxelGraphScriptNode[/url] resource backed by a GDScript contract. Inputs, outputs, and parameters are defined by the assigned script."},
     {"Sin", "Math", "Returns the result of [code]sin(x)[/code]"},
     {"Smoothstep", "Math", "Returns the result of smoothly interpolating the value of [code]x[/code] between [code]0[/code] and [code]1[/code], based on the where [code]x[/code] lies with respect to the edges [code]egde0[/code] and [code]edge1[/code]. The return value is [code]0[/code] if [code]x <= edge0[/code], and [code]1[/code] if [code]x >= edge1[/code]. If [code]x[/code] lies between [code]edge0[/code] and [code]edge1[/code], the returned value follows an S-shaped curve that maps [code]x[/code] between [code]0[/code] and [code]1[/code]. This S-shaped curve is the cubic Hermite interpolator, given by [code]f(y) = 3*y^2 - 2*y^3[/code] where [code]y = (x-edge0) / (edge1-edge0)[/code]."},
     {"Spots2D", "Noise", "Cellular noise optimized for \"ore patch\" generation: divides space into a 2D grid where each cell contains a circular \"spot\". Returns 1 when the position is inside the spot, 0 otherwise. [code]jitter[/code] more or less randomizes the position of the spot inside each cell. Limitation: high jitter can make spots clip with cell borders. This is intentional. If you need more generic cellular noise, use another node."},

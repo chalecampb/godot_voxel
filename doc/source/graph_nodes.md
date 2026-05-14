@@ -230,6 +230,10 @@ Outputs: `out`
 
 Pass-through node, allowing to better organize the path of long connections.
 
+### ScriptGraphNode
+
+Runs a custom [VoxelGraphScriptNode](api/VoxelGraphScriptNode.md) resource backed by a GDScript contract. Inputs, outputs, and parameters are defined by the assigned script.
+
 ## Noise
 
 ### FastNoise2D
