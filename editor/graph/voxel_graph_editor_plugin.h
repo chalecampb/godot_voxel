@@ -4,6 +4,7 @@
 #include "../../generators/graph/voxel_graph_function.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/classes/editor_plugin.h"
+#include "../../util/godot/core/packed_string_array.h"
 #include "../../util/godot/object_weak_ref.h"
 #include "../../util/macros.h"
 #include "voxel_graph_node_inspector_wrapper.h"

@@ -64,7 +64,6 @@ public:
 	bool reload_attached_script();
 	bool reload_script_contract(String path);
 	void refresh_metadata();
-	bool refresh_from_paths(PackedStringArray paths);
 
 	void set_shader_path(String path);
 	String get_shader_path() const;

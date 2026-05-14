@@ -1,6 +1,7 @@
 #include "voxel_graph_node_inspector_wrapper.h"
 #include "../../constants/voxel_string_names.h"
 #include "../../generators/graph/node_type_db.h"
+#include "../../generators/graph/voxel_graph_script_node.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/core/array.h"
 #include "../../util/io/log.h"
@@ -16,6 +17,38 @@ using namespace zylann::godot;
 
 namespace {
 const char *AUTOCONNECT_PROPERTY_NAME = "autoconnect_default_inputs";
+const char *SHADER_PATH_PROPERTY_NAME = "shader_path";
+const char *VALIDATION_ERRORS_PROPERTY_NAME = "validation_errors";
+const char *VALIDATION_WARNINGS_PROPERTY_NAME = "validation_warnings";
+
+bool try_get_script_graph_node(Ref<VoxelGraphFunction> graph, uint32_t node_id, Ref<VoxelGraphScriptNode> &out_node) {
+	if (graph.is_null() || !graph->has_node(node_id) ||
+			graph->get_node_type_id(node_id) != VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+		return false;
+	}
+	out_node = graph->get_node_param(node_id, 0);
+	return out_node.is_valid();
+}
+
+bool try_get_script_graph_node_parameter(
+		Ref<VoxelGraphFunction> graph,
+		uint32_t node_id,
+		StringName name,
+		Ref<VoxelGraphScriptNode> &out_custom_node,
+		Ref<VoxelGraphScriptNodeParameter> &out_parameter
+) {
+	if (!try_get_script_graph_node(graph, node_id, out_custom_node)) {
+		return false;
+	}
+	const String parameter_name = name;
+	for (const Ref<VoxelGraphScriptNodeParameter> &parameter : out_custom_node->get_parameter_definitions()) {
+		if (parameter.is_valid() && parameter->get_parameter_name() == parameter_name) {
+			out_parameter = parameter;
+			return true;
+		}
+	}
+	return false;
+}
 }
 
 void VoxelGraphNodeInspectorWrapper::setup(uint32_t p_node_id, VoxelGraphEditor *ed) {
@@ -46,12 +79,52 @@ void VoxelGraphNodeInspectorWrapper::_get_property_list(List<PropertyInfo> *p_li
 
 	p_list->push_back(PropertyInfo(Variant::STRING_NAME, "name", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR));
 
-	// Params
+	Ref<VoxelGraphScriptNode> custom_node;
+	if (try_get_script_graph_node(graph, _node_id, custom_node)) {
+		p_list->push_back(PropertyInfo(Variant::NIL, "ScriptGraphNode", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_CATEGORY));
+		p_list->push_back(
+				PropertyInfo(
+						Variant::OBJECT,
+						VoxelGraphScriptNode::SGN_SCRIPT_PROPERTY_NAME,
+						PROPERTY_HINT_RESOURCE_TYPE,
+						"Script",
+						PROPERTY_USAGE_EDITOR
+				)
+		);
+		p_list->push_back(PropertyInfo(Variant::STRING, SHADER_PATH_PROPERTY_NAME, PROPERTY_HINT_FILE, "*.glsl"));
+
+		if (custom_node->get_validation_errors().size() > 0) {
+			p_list->push_back(PropertyInfo(Variant::PACKED_STRING_ARRAY, VALIDATION_ERRORS_PROPERTY_NAME, PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY));
+		}
+		if (custom_node->get_validation_warnings().size() > 0) {
+			p_list->push_back(PropertyInfo(Variant::PACKED_STRING_ARRAY, VALIDATION_WARNINGS_PROPERTY_NAME, PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR | PROPERTY_USAGE_READ_ONLY));
+		}
+	}
+
+	// Parameters
 	{
 		const uint32_t node_type_id = graph->get_node_type_id(_node_id);
-		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(node_type_id);
+		if (custom_node.is_valid()) {
+			if (custom_node->get_parameter_definitions().size() > 0) {
+				p_list->push_back(
+						PropertyInfo(Variant::NIL, "Parameters", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_CATEGORY)
+				);
+				for (const Ref<VoxelGraphScriptNodeParameter> &parameter : custom_node->get_parameter_definitions()) {
+					if (parameter.is_null()) {
+						continue;
+					}
+					PropertyInfo pi;
+					pi.name = parameter->get_parameter_name();
+					pi.type = static_cast<Variant::Type>(parameter->get_parameter_type());
+					pi.usage = PROPERTY_USAGE_EDITOR;
+					p_list->push_back(pi);
+				}
+			}
+			return;
+		}
 
-		p_list->push_back(PropertyInfo(Variant::NIL, "Params", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_CATEGORY));
+		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(node_type_id);
+		p_list->push_back(PropertyInfo(Variant::NIL, "Parameters", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_CATEGORY));
 
 		for (const NodeType::Param &param : node_type.params) {
 			if (param.hidden) {
@@ -224,6 +297,35 @@ bool VoxelGraphNodeInspectorWrapper::_set(const StringName &p_name, const Varian
 
 	const String name = p_name;
 
+	Ref<VoxelGraphScriptNode> custom_node;
+	if (name == VoxelGraphScriptNode::SGN_SCRIPT_PROPERTY_NAME &&
+			try_get_script_graph_node(graph, _node_id, custom_node)) {
+		const Variant previous_script = custom_node->get_attached_script();
+		ur.create_action("Set SGN script", UndoRedo::MERGE_DISABLE, graph.ptr());
+		ur.force_fixed_history();
+		ur.add_do_property(custom_node.ptr(), VoxelGraphScriptNode::SGN_SCRIPT_PROPERTY_NAME, p_value);
+		ur.add_undo_property(custom_node.ptr(), VoxelGraphScriptNode::SGN_SCRIPT_PROPERTY_NAME, previous_script);
+		ur.add_do_method(graph.ptr(), "refresh_script_graph_node", _node_id);
+		ur.add_undo_method(graph.ptr(), "refresh_script_graph_node", _node_id);
+		ur.add_do_method(_graph_editor, "update_node_layout", _node_id);
+		ur.add_undo_method(_graph_editor, "update_node_layout", _node_id);
+		ur.add_do_method(this, "notify_property_list_changed");
+		ur.add_undo_method(this, "notify_property_list_changed");
+		ur.commit_action();
+		return true;
+	}
+
+	if (name == SHADER_PATH_PROPERTY_NAME && try_get_script_graph_node(graph, _node_id, custom_node)) {
+		const String previous_path = custom_node->get_shader_path();
+		ur.create_action("Set ScriptGraphNode shader path");
+		ur.add_do_method(custom_node.ptr(), "set_shader_path", p_value);
+		ur.add_undo_method(custom_node.ptr(), "set_shader_path", previous_path);
+		ur.add_do_method(this, "notify_property_list_changed");
+		ur.add_undo_method(this, "notify_property_list_changed");
+		ur.commit_action();
+		return true;
+	}
+
 	// Special case because `name` is neither a parameter nor an output
 	if (name == "name") {
 		String previous_name = graph->get_node_name(_node_id);
@@ -248,6 +350,20 @@ bool VoxelGraphNodeInspectorWrapper::_set(const StringName &p_name, const Varian
 		return true;
 	}
 
+	Ref<VoxelGraphScriptNodeParameter> custom_parameter;
+	if (try_get_script_graph_node_parameter(graph, _node_id, p_name, custom_node, custom_parameter)) {
+		const Variant previous_value = custom_node->get_parameter_value(custom_parameter->get_parameter_name());
+		ur.create_action("Set ScriptGraphNode parameter");
+		ur.add_do_method(custom_node.ptr(), "set_parameter_value", custom_parameter->get_parameter_name(), p_value);
+		ur.add_undo_method(custom_node.ptr(), "set_parameter_value", custom_parameter->get_parameter_name(), previous_value);
+		ur.add_do_method(graph.ptr(), "refresh_script_graph_node", _node_id);
+		ur.add_undo_method(graph.ptr(), "refresh_script_graph_node", _node_id);
+		ur.add_do_method(_graph_editor, "update_node_layout", _node_id);
+		ur.add_undo_method(_graph_editor, "update_node_layout", _node_id);
+		ur.commit_action();
+		return true;
+	}
+
 	uint32_t index;
 
 	if (graph->get_node_param_index_by_name(_node_id, p_name, index)) {
@@ -267,6 +383,9 @@ bool VoxelGraphNodeInspectorWrapper::_set(const StringName &p_name, const Varian
 		} else if (node_type_id == VoxelGraphFunction::NODE_COMMENT) {
 			ur.add_do_method(_graph_editor, "update_node_comment", _node_id);
 			ur.add_undo_method(_graph_editor, "update_node_comment", _node_id);
+		} else if (graph->does_node_layout_depend_on_params(_node_id)) {
+			ur.add_do_method(_graph_editor, "update_node_layout", _node_id);
+			ur.add_undo_method(_graph_editor, "update_node_layout", _node_id);
 		} else {
 			ur.add_do_method(this, "notify_property_list_changed");
 			ur.add_undo_method(this, "notify_property_list_changed");
@@ -297,6 +416,28 @@ bool VoxelGraphNodeInspectorWrapper::_get(const StringName &p_name, Variant &r_r
 
 	const String name = p_name;
 
+	Ref<VoxelGraphScriptNode> custom_node;
+	if (name == VoxelGraphScriptNode::SGN_SCRIPT_PROPERTY_NAME &&
+			try_get_script_graph_node(graph, _node_id, custom_node)) {
+		r_ret = custom_node->get_attached_script();
+		return true;
+	}
+
+	if (try_get_script_graph_node(graph, _node_id, custom_node)) {
+		if (name == SHADER_PATH_PROPERTY_NAME) {
+			r_ret = custom_node->get_shader_path();
+			return true;
+		}
+		if (name == VALIDATION_ERRORS_PROPERTY_NAME) {
+			r_ret = custom_node->get_validation_errors();
+			return true;
+		}
+		if (name == VALIDATION_WARNINGS_PROPERTY_NAME) {
+			r_ret = custom_node->get_validation_warnings();
+			return true;
+		}
+	}
+
 	if (name == "name") {
 		r_ret = graph->get_node_name(_node_id);
 		return true;
@@ -304,6 +445,12 @@ bool VoxelGraphNodeInspectorWrapper::_get(const StringName &p_name, Variant &r_r
 
 	if (name == AUTOCONNECT_PROPERTY_NAME) {
 		r_ret = graph->get_node_default_inputs_autoconnect(_node_id);
+		return true;
+	}
+
+	Ref<VoxelGraphScriptNodeParameter> custom_parameter;
+	if (try_get_script_graph_node_parameter(graph, _node_id, p_name, custom_node, custom_parameter)) {
+		r_ret = custom_node->get_parameter_value(custom_parameter->get_parameter_name());
 		return true;
 	}
 

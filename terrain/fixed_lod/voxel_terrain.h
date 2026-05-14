@@ -102,6 +102,7 @@ public:
 #ifdef VOXEL_ENABLE_GPU
 	void set_generator_use_gpu(bool enabled);
 	bool get_generator_use_gpu() const;
+	bool is_generator_using_gpu() const override;
 #endif
 
 	VoxelData &get_storage() const override;

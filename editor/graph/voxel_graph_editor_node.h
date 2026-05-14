@@ -49,6 +49,7 @@ public:
 
 private:
 	void update_title(const pg::VoxelGraphFunction &graph, uint32_t node_id);
+	void update_subtitle(const pg::VoxelGraphFunction &graph, uint32_t node_id);
 	void poll_default_inputs(const pg::VoxelGraphFunction &graph);
 	void poll_params(const pg::VoxelGraphFunction &graph);
 
@@ -60,6 +61,7 @@ private:
 	VoxelGraphEditorNodePreview *_preview = nullptr;
 	StdVector<Control *> _output_labels;
 	Label *_comment_label = nullptr;
+	Label *_subtitle_label = nullptr;
 
 	struct InputHint {
 		Label *label;

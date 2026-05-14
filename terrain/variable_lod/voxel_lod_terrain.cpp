@@ -2899,6 +2899,10 @@ bool VoxelLodTerrain::get_generator_use_gpu() const {
 	return _update_data->settings.generator_use_gpu;
 }
 
+bool VoxelLodTerrain::is_generator_using_gpu() const {
+	return get_generator_use_gpu();
+}
+
 #endif
 
 void VoxelLodTerrain::set_cache_generated_blocks(const bool enabled) {

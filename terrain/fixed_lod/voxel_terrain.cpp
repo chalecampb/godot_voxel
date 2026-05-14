@@ -130,6 +130,10 @@ void VoxelTerrain::set_generator_use_gpu(bool enabled) {
 bool VoxelTerrain::get_generator_use_gpu() const {
 	return _generator_use_gpu;
 }
+
+bool VoxelTerrain::is_generator_using_gpu() const {
+	return get_generator_use_gpu();
+}
 #endif
 
 VoxelData &VoxelTerrain::get_storage() const {

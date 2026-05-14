@@ -279,7 +279,6 @@ public:
 	void update_script_graph_nodes(StdVector<ProgramGraph::Connection> *removed_connections);
 	void refresh_script_graph_node(uint32_t node_id);
 	void refresh_script_graph_nodes();
-	void refresh_script_graph_nodes_from_paths(PackedStringArray paths, PackedInt32Array *out_updated_node_ids);
 	bool does_node_layout_depend_on_params(uint32_t node_id) const;
 	bool should_node_fit_content_after_layout_update(uint32_t node_id) const;
 

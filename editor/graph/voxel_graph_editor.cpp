@@ -510,7 +510,7 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 	VoxelGraphEditorNode *view = get_node_typed<VoxelGraphEditorNode>(graph_edit, view_name);
 	ERR_FAIL_COND(view == nullptr);
 
-	// Remove all GUI connections going to the node
+	// Remove all GUI connections going to or from the node
 
 	StdVector<GraphEditConnection> old_connections;
 	get_graph_edit_connections(graph_edit, old_connections);
@@ -521,17 +521,20 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 		if (to_view == nullptr) {
 			continue;
 		}
-		if (to_view == view) {
+		const NodePath from = to_node_path(con.from);
+		const VoxelGraphEditorNode *from_view = get_node_typed<VoxelGraphEditorNode>(graph_edit, from);
+		if (to_view == view || from_view == view) {
 			graph_edit.disconnect_node(con.from, con.from_port, con.to, con.to_port);
 		}
 	}
 
 	// Update node layout
 
+	view->update_title(**_graph);
 	view->update_layout(**_graph);
-
-	// TODO What about output connections?
-	// Currently assuming there is always only one for expression nodes, therefore it might be ok?
+	if (_graph->should_node_fit_content_after_layout_update(node_id)) {
+		view->set_size(view->get_combined_minimum_size());
+	}
 
 	// Add connections back by reading the graph
 
@@ -542,7 +545,7 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 	for (size_t i = 0; i < all_connections.size(); ++i) {
 		const ProgramGraph::Connection &con = all_connections[i];
 
-		if (con.dst.node_id == node_id) {
+		if (con.dst.node_id == node_id || con.src.node_id == node_id) {
 			graph_edit.connect_node(
 					node_to_gui_name(con.src.node_id),
 					con.src.port_index,
@@ -1049,6 +1052,14 @@ void reset_modulates(GraphEdit &graph_edit) {
 
 void VoxelGraphEditor::update_previews(bool with_live_update) {
 	ZN_ASSERT_RETURN(_graph.is_valid());
+	ERR_FAIL_COND(_updating_previews);
+	_updating_previews = true;
+	struct PreviewUpdateGuard {
+		bool &updating_previews;
+		~PreviewUpdateGuard() {
+			updating_previews = false;
+		}
+	} preview_update_scope{ _updating_previews };
 
 	clear_range_analysis_tooltips();
 	hide_profiling_ratios();
@@ -1249,7 +1260,21 @@ void VoxelGraphEditor::schedule_preview_update() {
 }
 
 void VoxelGraphEditor::_on_graph_changed() {
+	if (_updating_previews) {
+		// Preview updates compile the graph, and compilation can emit `changed` from subresources. Ignore it so
+		// refreshing previews does not schedule another refresh of itself.
+		return;
+	}
 	schedule_preview_update();
+	if (_graph.is_valid() && _graph_edit != nullptr) {
+		PackedInt32Array node_ids = _graph->get_node_ids();
+		for (int i = 0; i < node_ids.size(); ++i) {
+			const uint32_t node_id = node_ids[i];
+			if (_graph->does_node_layout_depend_on_params(node_id)) {
+				update_node_layout(node_id);
+			}
+		}
+	}
 }
 
 void VoxelGraphEditor::_on_graph_node_name_changed(int node_id) {

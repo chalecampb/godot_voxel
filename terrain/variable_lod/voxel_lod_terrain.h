@@ -132,6 +132,7 @@ public:
 #ifdef VOXEL_ENABLE_GPU
 	void set_generator_use_gpu(const bool enabled);
 	bool get_generator_use_gpu() const;
+	bool is_generator_using_gpu() const override;
 #endif
 
 	void set_cache_generated_blocks(bool enabled);

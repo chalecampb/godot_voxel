@@ -371,35 +371,6 @@ void VoxelGraphFunction::refresh_script_graph_nodes() {
 	emit_changed();
 }
 
-void VoxelGraphFunction::refresh_script_graph_nodes_from_paths(
-		PackedStringArray paths,
-		PackedInt32Array *out_updated_node_ids
-) {
-	StdVector<uint32_t> node_ids;
-	_graph.for_each_node_id([this, &node_ids](uint32_t node_id) {
-		const ProgramGraph::Node &node = _graph.get_node(node_id);
-		if (node.type_id == NODE_SCRIPT_GRAPH) {
-			node_ids.push_back(node_id);
-		}
-	});
-
-	for (uint32_t node_id : node_ids) {
-		ProgramGraph::Node &node = _graph.get_node(node_id);
-		ZN_ASSERT_CONTINUE(node.params.size() >= 1);
-		Ref<VoxelGraphScriptNode> script_node = node.params[0];
-		ZN_ASSERT_CONTINUE(script_node.is_valid());
-
-		if (!script_node->refresh_from_paths(paths)) {
-			continue;
-		}
-
-		refresh_script_graph_node(node_id);
-		if (out_updated_node_ids != nullptr) {
-			out_updated_node_ids->push_back(node_id);
-		}
-	}
-}
-
 bool VoxelGraphFunction::does_node_layout_depend_on_params(uint32_t node_id) const {
 	const ProgramGraph::Node *node = _graph.try_get_node(node_id);
 	ERR_FAIL_COND_V(node == nullptr, false);

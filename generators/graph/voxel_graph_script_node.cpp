@@ -380,35 +380,6 @@ void VoxelGraphScriptNode::refresh_metadata() {
 	emit_changed_deferred();
 }
 
-bool VoxelGraphScriptNode::refresh_from_paths(PackedStringArray paths) {
-	const String script_path = get_script_path();
-	const String shader_path = get_shader_path();
-	if (script_path.is_empty() && shader_path.is_empty()) {
-		return false;
-	}
-
-	bool script_path_matches = paths.size() == 0;
-	bool shader_path_matches = paths.size() == 0;
-	for (int path_index = 0; path_index < paths.size(); ++path_index) {
-		if (paths[path_index] == script_path) {
-			script_path_matches = true;
-		}
-		if (!shader_path.is_empty() && paths[path_index] == shader_path) {
-			shader_path_matches = true;
-		}
-	}
-
-	if (script_path_matches) {
-		reload_attached_script();
-		return true;
-	}
-	if (shader_path_matches) {
-		refresh_metadata();
-		return true;
-	}
-	return false;
-}
-
 void VoxelGraphScriptNode::set_shader_path(String path) {
 	_shader_path = path;
 	increment_revision();
@@ -967,7 +938,6 @@ void VoxelGraphScriptNode::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("reload_attached_script"), &Self::reload_attached_script);
 	ClassDB::bind_method(D_METHOD("reload_script_contract", "path"), &Self::reload_script_contract);
 	ClassDB::bind_method(D_METHOD("refresh_metadata"), &Self::refresh_metadata);
-	ClassDB::bind_method(D_METHOD("refresh_from_paths", "paths"), &Self::refresh_from_paths);
 	ClassDB::bind_method(D_METHOD("set_shader_path", "path"), &Self::set_shader_path);
 	ClassDB::bind_method(D_METHOD("get_shader_path"), &Self::get_shader_path);
 	ClassDB::bind_method(D_METHOD("set_entry_point", "entry_point"), &Self::set_entry_point);
