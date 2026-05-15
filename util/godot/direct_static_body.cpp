@@ -78,13 +78,14 @@ Ref<Shape3D> DirectStaticBody::get_shape(int shape_index) const {
 	return _shape;
 }
 
-void DirectStaticBody::set_world(World3D *world) {
+void DirectStaticBody::set_world(Ref<World3D> world) {
 	ERR_FAIL_COND(!_body.is_valid());
+	World3D *world_ptr = world.ptr();
 	PhysicsServer3D &ps = *PhysicsServer3D::get_singleton();
-	ps.body_set_space(_body, world != nullptr ? world->get_space() : RID());
+	ps.body_set_space(_body, world_ptr != nullptr ? world_ptr->get_space() : RID());
 
 	if (_debug_mesh_instance.is_valid()) {
-		_debug_mesh_instance.set_world(world);
+		_debug_mesh_instance.set_world(world_ptr);
 	}
 }
 

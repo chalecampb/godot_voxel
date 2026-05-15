@@ -44,7 +44,7 @@ public:
 			_set_visible(_visible && _parent_visible);
 
 			if (_static_body.is_valid()) {
-				_static_body.set_world(*p_world);
+				_static_body.set_world(p_world);
 			}
 		}
 	}

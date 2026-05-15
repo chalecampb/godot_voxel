@@ -25,7 +25,7 @@ void VoxelMeshBlock::set_world(Ref<World3D> p_world) {
 		_set_visible(_visible && _parent_visible);
 
 		if (_static_body.is_valid()) {
-			_static_body.set_world(*p_world);
+			_static_body.set_world(p_world);
 		}
 	}
 }
@@ -155,7 +155,7 @@ void VoxelMeshBlock::set_collision_shape(Ref<Shape3D> shape, bool debug_collisio
 
 	if (!_static_body.is_valid()) {
 		_static_body.create();
-		_static_body.set_world(*_world);
+		_static_body.set_world(_world);
 		// This allows collision signals to provide the terrain node in the `collider` field
 		_static_body.set_attached_object(node);
 
