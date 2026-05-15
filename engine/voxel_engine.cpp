@@ -74,6 +74,11 @@ VoxelEngine::VoxelEngine(Config config) {
 }
 
 VoxelEngine::~VoxelEngine() {
+#ifdef VOXEL_ENABLE_GPU
+	// GPU tasks may hand work back to the general thread pool when they complete.
+	_gpu_task_runner.stop();
+#endif
+
 	// The GDScriptLanguage singleton can get destroyed before ours, so any script referenced by tasks
 	// cannot be freed. To work this around, tasks are cleared when the scene tree autoload is destroyed.
 	// So normally there should not be any task left to clear here,
@@ -81,9 +86,10 @@ VoxelEngine::~VoxelEngine() {
 	// See https://github.com/Zylann/godot_voxel/issues/189
 	wait_and_clear_all_tasks(true);
 
-#ifdef VOXEL_ENABLE_GPU
-	_gpu_task_runner.stop();
-#endif
+	// Some main-thread tasks destroy mesh blocks, whose destructors can enqueue FreeMeshTask instances.
+	// Flush both queues here, while their relative order is explicit and before member destructors run.
+	_time_spread_task_runner.flush();
+	_progressive_task_runner.flush();
 }
 
 static bool auto_detect_threaded_graphics_resource_building_support() {
