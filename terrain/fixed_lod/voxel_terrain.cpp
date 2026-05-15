@@ -6,6 +6,7 @@
 #include "../../engine/voxel_engine.h"
 #include "../../engine/voxel_engine_updater.h"
 #include "../../generators/generate_block_task.h"
+#include "../../generators/graph/voxel_generator_graph.h"
 #include "../../meshers/blocky/voxel_mesher_blocky.h"
 #include "../../meshers/mesh_block_task.h"
 #include "../../storage/voxel_buffer_gd.h"
@@ -23,6 +24,7 @@
 #include "../../util/godot/classes/script.h"
 #include "../../util/godot/classes/shader_material.h"
 #include "../../util/godot/core/array.h"
+#include "../../util/godot/core/callable_mp.h"
 #include "../../util/godot/core/string.h"
 #include "../../util/macros.h"
 #include "../../util/math/conv.h"
@@ -130,10 +132,6 @@ void VoxelTerrain::set_generator_use_gpu(bool enabled) {
 bool VoxelTerrain::get_generator_use_gpu() const {
 	return _generator_use_gpu;
 }
-
-bool VoxelTerrain::is_generator_using_gpu() const {
-	return get_generator_use_gpu();
-}
 #endif
 
 VoxelData &VoxelTerrain::get_storage() const {
@@ -178,6 +176,10 @@ void VoxelTerrain::set_generator(Ref<VoxelGenerator> p_generator) {
 
 	Ref<VoxelGenerator> prev_generator = get_generator();
 	if (prev_generator.is_valid()) {
+		const Callable callable = callable_mp(this, &VoxelTerrain::_on_generator_regeneration_requested);
+		if (prev_generator->is_connected(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable)) {
+			prev_generator->disconnect(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable);
+		}
 		prev_generator->clear_cache();
 		// TODO if we were to share this generator on multiple terrains, cache should not be entirely cleared. Instead,
 		// we should just remove the area from all paired viewers.
@@ -187,6 +189,13 @@ void VoxelTerrain::set_generator(Ref<VoxelGenerator> p_generator) {
 
 	MeshingDependency::reset(_meshing_dependency, _mesher, p_generator);
 	StreamingDependency::reset(_streaming_dependency, get_stream(), p_generator);
+
+	if (p_generator.is_valid()) {
+		const Callable callable = callable_mp(this, &VoxelTerrain::_on_generator_regeneration_requested);
+		if (!p_generator->is_connected(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable)) {
+			p_generator->connect(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable);
+		}
+	}
 
 #ifdef TOOLS_ENABLED
 	if (p_generator.is_valid()) {
@@ -207,6 +216,30 @@ void VoxelTerrain::set_generator(Ref<VoxelGenerator> p_generator) {
 
 Ref<VoxelGenerator> VoxelTerrain::get_generator() const {
 	return _data->get_generator();
+}
+
+void VoxelTerrain::_on_generator_regeneration_requested() {
+	Ref<VoxelGenerator> generator = get_generator();
+	ERR_FAIL_COND(generator.is_null());
+
+	VoxelGeneratorGraph *graph_generator = Object::cast_to<VoxelGeneratorGraph>(*generator);
+	if (graph_generator != nullptr) {
+		const pg::CompilationResult result = graph_generator->compile(true);
+		if (!result.success) {
+			ERR_PRINT(
+					String("Graph compilation failed before terrain regeneration: {0}").format(varray(result.message))
+			);
+			return;
+		}
+	}
+
+#ifdef VOXEL_ENABLE_GPU
+	if (get_generator_use_gpu() && generator->supports_shaders()) {
+		generator->compile_shaders();
+	}
+#endif
+
+	restart_stream();
 }
 
 // void VoxelTerrain::_set_block_size_po2(int p_block_size_po2) {

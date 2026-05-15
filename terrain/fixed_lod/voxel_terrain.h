@@ -102,7 +102,6 @@ public:
 #ifdef VOXEL_ENABLE_GPU
 	void set_generator_use_gpu(bool enabled);
 	bool get_generator_use_gpu() const;
-	bool is_generator_using_gpu() const override;
 #endif
 
 	VoxelData &get_storage() const override;
@@ -221,6 +220,7 @@ private:
 	void apply_data_block_response(VoxelEngine::BlockDataOutput &ob);
 
 	void _on_stream_params_changed();
+	void _on_generator_regeneration_requested();
 	// void _set_block_size_po2(int p_block_size_po2);
 	// void make_all_view_dirty();
 	void start_updater();

@@ -132,7 +132,6 @@ public:
 #ifdef VOXEL_ENABLE_GPU
 	void set_generator_use_gpu(const bool enabled);
 	bool get_generator_use_gpu() const;
-	bool is_generator_using_gpu() const override;
 #endif
 
 	void set_cache_generated_blocks(bool enabled);
@@ -333,6 +332,7 @@ private:
 	void set_mesh_block_visual_active(VoxelMeshBlockVLT &block, bool active, bool with_fading, unsigned int lod_index);
 
 	void _on_stream_params_changed();
+	void _on_generator_regeneration_requested();
 
 	void update_shader_material_pool_template();
 

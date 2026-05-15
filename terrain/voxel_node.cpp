@@ -100,10 +100,6 @@ void VoxelNode::remesh_all_blocks() {
 	// Implemented in subclasses
 }
 
-bool VoxelNode::is_generator_using_gpu() const {
-	return false;
-}
-
 VolumeID VoxelNode::get_volume_id() const {
 	ZN_PRINT_ERROR("Not implemented");
 	// Implemented in subclasses

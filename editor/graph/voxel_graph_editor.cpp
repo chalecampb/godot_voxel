@@ -1130,10 +1130,8 @@ void VoxelGraphEditor::update_previews(bool with_live_update) {
 		if (hash != _last_output_graph_hash) {
 			_last_output_graph_hash = hash;
 
-			// Not calling into `_voxel_node` directly because the editor could be pinned and the terrain not actually
-			// selected. In this situation the plugin may reset the node to null. But it is desirable for terrains
-			// using the current graph to update if they are in the edited scene, so this may be delegated to the editor
-			// plugin. There isn't enough context from here to do this cleanly.
+			// The editor may be pinned with no terrain selected. The plugin will ask the generator to request
+			// regeneration; terrains using it decide whether and how to restart.
 			emit_signal(SIGNAL_REGENERATE_REQUESTED);
 		}
 	}

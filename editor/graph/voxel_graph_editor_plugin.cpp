@@ -31,24 +31,6 @@ using namespace zylann::godot;
 
 VoxelGraphEditorPlugin::VoxelGraphEditorPlugin() {}
 
-namespace {
-
-bool prepare_graph_generator_for_editor_regeneration(VoxelNode &node, VoxelGeneratorGraph &generator) {
-	const pg::CompilationResult result = generator.compile(true);
-	if (!result.success) {
-		ERR_PRINT(String("Graph compilation failed before terrain regeneration: {0}").format(varray(result.message)));
-		return false;
-	}
-#ifdef VOXEL_ENABLE_GPU
-	if (node.is_generator_using_gpu()) {
-		generator.compile_shaders();
-	}
-#endif
-	return true;
-}
-
-} // namespace
-
 // TODO GDX: Can't initialize EditorPlugins in their constructor when they access EditorNode.
 // See https://github.com/godotengine/godot-cpp/issues/1179
 void VoxelGraphEditorPlugin::init() {
@@ -282,41 +264,11 @@ void VoxelGraphEditorPlugin::_on_graph_editor_nodes_deleted() {
 	inspect_graph_or_generator(*_graph_editor);
 }
 
-template <typename F>
-void for_each_node(Node *parent, F action) {
-	action(parent);
-	for (int i = 0; i < parent->get_child_count(); ++i) {
-		for_each_node(parent->get_child(i), action);
-	}
-}
-
 void VoxelGraphEditorPlugin::_on_graph_editor_regenerate_requested() {
 	Ref<VoxelGeneratorGraph> generator = _graph_editor->get_generator();
 	ERR_FAIL_COND(generator.is_null());
 
-	// We could be editing the graph standalone with no terrain loaded
-	VoxelNode *terrain_node = _voxel_node.get();
-	if (terrain_node != nullptr) {
-		// Re-generate the selected terrain.
-		if (prepare_graph_generator_for_editor_regeneration(*terrain_node, **generator)) {
-			terrain_node->restart_stream();
-		}
-
-	} else {
-		// The node is not selected, but it might be in the tree
-		Node *root = get_editor_interface()->get_edited_scene_root();
-
-		if (root != nullptr) {
-			for_each_node(root, [&generator](Node *node) {
-				VoxelNode *vnode = Object::cast_to<VoxelNode>(node);
-				if (vnode != nullptr && vnode->get_generator() == generator) {
-					if (prepare_graph_generator_for_editor_regeneration(*vnode, **generator)) {
-						vnode->restart_stream();
-					}
-				}
-			});
-		}
-	}
+	generator->request_regeneration();
 }
 
 void VoxelGraphEditorPlugin::_on_graph_editor_popout_requested() {

@@ -4,6 +4,7 @@
 #include "../../engine/buffered_task_scheduler.h"
 #include "../../engine/voxel_engine_gd.h"
 #include "../../engine/voxel_engine_updater.h"
+#include "../../generators/graph/voxel_generator_graph.h"
 #include "../../meshers/blocky/voxel_mesher_blocky.h"
 #include "../../meshers/transvoxel/voxel_mesher_transvoxel.h"
 #include "../../storage/voxel_buffer_gd.h"
@@ -23,6 +24,7 @@
 #include "../../util/godot/classes/shader.h"
 #include "../../util/godot/classes/viewport.h"
 #include "../../util/godot/core/array.h"
+#include "../../util/godot/core/callable_mp.h"
 #include "../../util/godot/core/string.h"
 #include "../../util/math/color.h"
 #include "../../util/math/conv.h"
@@ -332,10 +334,25 @@ void VoxelLodTerrain::set_generator(Ref<VoxelGenerator> p_generator) {
 		return;
 	}
 
+	Ref<VoxelGenerator> prev_generator = get_generator();
+	if (prev_generator.is_valid()) {
+		const Callable callable = callable_mp(this, &VoxelLodTerrain::_on_generator_regeneration_requested);
+		if (prev_generator->is_connected(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable)) {
+			prev_generator->disconnect(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable);
+		}
+	}
+
 	_data->set_generator(p_generator);
 
 	MeshingDependency::reset(_meshing_dependency, _mesher, p_generator);
 	StreamingDependency::reset(_streaming_dependency, get_stream(), p_generator);
+
+	if (p_generator.is_valid()) {
+		const Callable callable = callable_mp(this, &VoxelLodTerrain::_on_generator_regeneration_requested);
+		if (!p_generator->is_connected(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable)) {
+			p_generator->connect(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable);
+		}
+	}
 
 #ifdef TOOLS_ENABLED
 	if (p_generator.is_valid()) {
@@ -356,6 +373,30 @@ void VoxelLodTerrain::set_generator(Ref<VoxelGenerator> p_generator) {
 
 Ref<VoxelGenerator> VoxelLodTerrain::get_generator() const {
 	return _data->get_generator();
+}
+
+void VoxelLodTerrain::_on_generator_regeneration_requested() {
+	Ref<VoxelGenerator> generator = get_generator();
+	ERR_FAIL_COND(generator.is_null());
+
+	VoxelGeneratorGraph *graph_generator = Object::cast_to<VoxelGeneratorGraph>(*generator);
+	if (graph_generator != nullptr) {
+		const pg::CompilationResult result = graph_generator->compile(true);
+		if (!result.success) {
+			ERR_PRINT(
+					String("Graph compilation failed before terrain regeneration: {0}").format(varray(result.message))
+			);
+			return;
+		}
+	}
+
+#ifdef VOXEL_ENABLE_GPU
+	if (get_generator_use_gpu() && generator->supports_shaders()) {
+		generator->compile_shaders();
+	}
+#endif
+
+	restart_stream();
 }
 
 void VoxelLodTerrain::_on_gi_mode_changed() {
@@ -2897,10 +2938,6 @@ void VoxelLodTerrain::set_generator_use_gpu(bool enabled) {
 
 bool VoxelLodTerrain::get_generator_use_gpu() const {
 	return _update_data->settings.generator_use_gpu;
-}
-
-bool VoxelLodTerrain::is_generator_using_gpu() const {
-	return get_generator_use_gpu();
 }
 
 #endif
