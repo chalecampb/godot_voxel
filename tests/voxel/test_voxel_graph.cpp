@@ -11,7 +11,6 @@
 #include "../../util/containers/container_funcs.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/classes/fast_noise_lite.h"
-#include "../../util/godot/classes/file_access.h"
 #include "../../util/godot/classes/image.h"
 #include "../../util/godot/classes/object.h"
 #include "../../util/godot/core/random_pcg.h"
@@ -2710,8 +2709,8 @@ void test_voxel_graph_get_io_indices() {
 
 namespace {
 
-const char *SGN_TEST_SCRIPT_PATH = "user://sgn_test_node.gd";
-const char *SGN_TEST_SHADER_PATH = "user://sgn_test_node.glsl";
+const char *SGN_TEST_SCRIPT_PATH = "res://tests/sgn_test_node.gd";
+const char *SGN_TEST_SHADER_PATH = "res://tests/sgn_test_node.glsl";
 
 class SignalCounter : public Object {
 public:
@@ -2722,44 +2721,7 @@ public:
 	int count = 0;
 };
 
-bool write_text_file(String path, String text) {
-	Ref<FileAccess> file = FileAccess::open(path, FileAccess::WRITE);
-	ZN_TEST_ASSERT(file.is_valid());
-	file->store_string(text);
-	return true;
-}
-
-void write_test_script_graph_node_files() {
-	const String shader_source = "uniform float gain;\n"
-								 "\n"
-								 "void generate(float x, float bias, out float sdf) {\n"
-								 "\tsdf = x * gain + bias;\n"
-								 "}\n";
-
-	const String script_source = String("@tool\n"
-										"extends VoxelGraphScriptNode\n"
-										"\n"
-										"@export var gain := 2.0\n"
-										"\n"
-										"\n"
-										"func _init() -> void:\n"
-										"\tadd_input(\"x\")\n"
-										"\tadd_input(\"bias\")\n"
-										"\tadd_output(\"sdf\")\n"
-										"\tset_shader_path(\"{0}\")\n"
-										"\n"
-										"\n"
-										"func generate(inputs: Dictionary, outputs: Dictionary) -> void:\n"
-										"\toutputs[\"sdf\"] = inputs[\"x\"] * gain + inputs[\"bias\"]\n")
-										.format(varray(SGN_TEST_SHADER_PATH));
-
-	ZN_TEST_ASSERT(write_text_file(SGN_TEST_SHADER_PATH, shader_source));
-	ZN_TEST_ASSERT(write_text_file(SGN_TEST_SCRIPT_PATH, script_source));
-}
-
 Ref<VoxelGraphScriptNode> load_test_script_graph_node() {
-	write_test_script_graph_node_files();
-
 	Ref<VoxelGraphScriptNode> script_node;
 	script_node.instantiate();
 	const bool loaded = script_node->reload_script_contract(SGN_TEST_SCRIPT_PATH);
@@ -2778,8 +2740,6 @@ uint32_t create_test_script_graph_node(VoxelGraphFunction &graph, Ref<VoxelGraph
 } // namespace
 
 void test_voxel_graph_sgn_load_script_contract() {
-	write_test_script_graph_node_files();
-
 	Ref<VoxelGraphScriptNode> script_node;
 	script_node.instantiate();
 	script_node->set_script_path(SGN_TEST_SCRIPT_PATH);
