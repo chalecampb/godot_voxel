@@ -9,6 +9,7 @@
 #include "../../util/godot/core/packed_string_array.h"
 #include "../../util/godot/core/typed_array.h"
 #include "../../util/godot/core/variant.h"
+#include "../../util/string/std_string.h"
 #include "program_graph.h"
 
 namespace zylann::voxel::pg {
@@ -58,6 +59,13 @@ class VoxelGraphScriptNode : public Resource {
 public:
 	static const char *SGN_SCRIPT_PROPERTY_NAME;
 
+	struct ShaderSource {
+		bool success = false;
+		String error;
+		StdString function_name;
+		StdString source_code;
+	};
+
 	void set_script_path(String path);
 	String get_script_path() const;
 	void set_attached_script(Variant script);
@@ -102,6 +110,7 @@ public:
 	bool is_valid() const;
 	bool is_gpu_compatible() const;
 	uint64_t get_revision() const;
+	ShaderSource get_shader_source(uint32_t node_id);
 	void generate(Dictionary inputs, Dictionary outputs);
 
 #ifdef TOOLS_ENABLED

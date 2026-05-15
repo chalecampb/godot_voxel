@@ -475,7 +475,7 @@ Completion notes:
 
 ## Task 8: Shrink The SGN Resource Contract
 
-Status: [ ]
+Status: [x]
 
 Priority: high.
 
@@ -525,8 +525,8 @@ Verification:
 
 Completion notes:
 
-- Completed:
-- Verified:
+- Completed: moved SGN-specific GLSL file loading, identifier collection, namespacing, uniform constant replacement, and entry point validation out of `generators/graph/voxel_graph_shader_generator.cpp` into `VoxelGraphScriptNode::get_shader_source()`, which returns a small `ShaderSource` helper result containing the generated function name, shader source, and any SGN-specific error. The graph shader generator now only detects `NODE_SCRIPT_GRAPH`, asks the script node for shader source, registers the returned library code, and emits the call using graph input/output variables.
+- Verified: ran `rg -n "NODE_SCRIPT_GRAPH|is_script_graph_node|VoxelGraphScriptNode|regex|collect_script_graph|get_shader_source" generators/graph/voxel_graph_shader_generator.cpp generators/graph/voxel_graph_script_node.cpp generators/graph/voxel_graph_script_node.h`; SGN GLSL parsing/regex code is now in `VoxelGraphScriptNode`, while the upper shader generator only has SGN dispatch/call emission. Ran `scons platform=windows target=editor voxel_tests=yes dev_build=yes debug_symbols=yes` successfully. Ran `bin\godot.windows.editor.dev.x86_64.console.exe --path modules\voxel\project res://tests/runner.tscn` with output redirected and stopped the process after the expected `------------ Voxel tests end -------------` marker; the run included `test_voxel_graph_sgn_shader_compilation` and `test_voxel_graph_sgn_shader_path_property`.
 
 ## Task 9: Trim Tests To A Focused Acceptance Suite
 
@@ -633,7 +633,7 @@ Agents should pick one of these batches, not the whole plan.
 - [x] Compiler/runtime SGN dynamic-port handling is small, localized, and easy to justify.
 - [x] Output hash SGN revision handling is minimal or deferred.
 - [x] Dynamic output serialization is minimal and clearly justified.
-- [ ] Shader generation SGN special-casing is reduced, localized, or documented as the remaining exception.
+- [x] Shader generation SGN special-casing is reduced, localized, or documented as the remaining exception.
 - [ ] SGN resource and test diffs have been reviewed for MVP scope.
 - [x] SGN tests pass.
 - [x] Build passes.

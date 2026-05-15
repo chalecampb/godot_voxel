@@ -64,6 +64,96 @@ std::string trim(std::string s) {
 	return s.substr(b, e - b + 1);
 }
 
+StdString get_glsl_type_name(Variant::Type type) {
+	switch (type) {
+		case Variant::FLOAT:
+			return "float";
+		case Variant::INT:
+			return "int";
+		case Variant::BOOL:
+			return "bool";
+		default:
+			return "float";
+	}
+}
+
+StdString get_glsl_literal(Variant value, Variant::Type type) {
+	switch (type) {
+		case Variant::FLOAT:
+			return format("{}", value.operator float());
+		case Variant::INT:
+			return format("{}", value.operator int());
+		case Variant::BOOL:
+			return value.operator bool() ? "true" : "false";
+		default:
+			return "0.0";
+	}
+}
+
+bool is_glsl_identifier_char(char c) {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+std::string sanitize_glsl_identifier(std::string s) {
+	for (char &c : s) {
+		if (!is_glsl_identifier_char(c)) {
+			c = '_';
+		}
+	}
+	if (s.empty() || (s[0] >= '0' && s[0] <= '9')) {
+		s.insert(s.begin(), '_');
+	}
+	return s;
+}
+
+void replace_glsl_identifier(std::string &source, const std::string &from, const std::string &to) {
+	if (from == to || from.empty()) {
+		return;
+	}
+
+	size_t pos = 0;
+	while ((pos = source.find(from, pos)) != std::string::npos) {
+		const bool left_boundary = pos == 0 || !is_glsl_identifier_char(source[pos - 1]);
+		const size_t end = pos + from.size();
+		const bool right_boundary = end == source.size() || !is_glsl_identifier_char(source[end]);
+		if (left_boundary && right_boundary) {
+			source.replace(pos, from.size(), to);
+			pos += to.size();
+		} else {
+			pos = end;
+		}
+	}
+}
+
+StdVector<std::string> collect_script_graph_node_global_identifiers(const std::string &source) {
+	StdVector<std::string> identifiers;
+
+	const std::regex uniform_regex("\\buniform\\s+(?:float|int|bool)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;");
+	for (std::sregex_iterator it(source.begin(), source.end(), uniform_regex); it != std::sregex_iterator(); ++it) {
+		identifiers.push_back((*it)[1].str());
+	}
+
+	const std::regex function_regex(
+			"\\b(?:void|float|int|bool|vec2|vec3|vec4|ivec2|ivec3|ivec4|bvec2|bvec3|bvec4)\\s+"
+			"([A-Za-z_][A-Za-z0-9_]*)\\s*\\([^;{}]*\\)\\s*\\{"
+	);
+	for (std::sregex_iterator it(source.begin(), source.end(), function_regex); it != std::sregex_iterator(); ++it) {
+		identifiers.push_back((*it)[1].str());
+	}
+
+	return identifiers;
+}
+
+std::string get_shader_prefix(String script_path, uint32_t node_id) {
+	const String script_namespace_gd = script_path.get_file().get_basename();
+	const StdString script_namespace_tmp = zylann::godot::to_std_string(script_namespace_gd);
+	return format(
+			"{}_{}_",
+			sanitize_glsl_identifier(std::string(script_namespace_tmp.c_str())).c_str(),
+			node_id
+	).c_str();
+}
+
 bool read_text_file(String path, String &out_text, String &out_error) {
 	if (path.is_empty()) {
 		out_error = "Path is empty.";
@@ -644,6 +734,72 @@ bool VoxelGraphScriptNode::is_gpu_compatible() const {
 
 uint64_t VoxelGraphScriptNode::get_revision() const {
 	return _revision;
+}
+
+VoxelGraphScriptNode::ShaderSource VoxelGraphScriptNode::get_shader_source(uint32_t node_id) {
+	ShaderSource result;
+
+	if (!validate()) {
+		PackedStringArray errors = get_validation_errors();
+		result.error = errors.size() > 0 ? errors[0] : String("ScriptGraphNode contract is invalid.");
+		return result;
+	}
+
+	if (!is_gpu_compatible()) {
+		PackedStringArray warnings = get_validation_warnings();
+		result.error =
+				warnings.size() > 0 ? warnings[0] : String("ScriptGraphNode has no GPU-compatible GLSL backing.");
+		return result;
+	}
+
+	String source_text;
+	String read_error;
+	if (!read_text_file(get_shader_path(), source_text, read_error)) {
+		result.error = String("ScriptGraphNode GLSL file error: {0}").format(varray(read_error));
+		return result;
+	}
+
+	const StdString source_tmp = zylann::godot::to_std_string(source_text);
+	std::string source(source_tmp.c_str());
+
+	const std::string node_prefix = get_shader_prefix(get_script_path(), node_id);
+	const StdVector<std::string> global_identifiers = collect_script_graph_node_global_identifiers(source);
+	for (const std::string &identifier : global_identifiers) {
+		replace_glsl_identifier(source, identifier, node_prefix + identifier);
+	}
+
+	for (const Ref<VoxelGraphScriptNodeParameter> &parameter : get_parameter_definitions()) {
+		if (parameter.is_null()) {
+			continue;
+		}
+
+		const String parameter_name = parameter->get_parameter_name();
+		const StdString parameter_name_tmp = zylann::godot::to_std_string(parameter_name);
+		const std::string parameter_name_std(parameter_name_tmp.c_str());
+		const Variant::Type parameter_type = static_cast<Variant::Type>(parameter->get_parameter_type());
+		const std::string namespaced_parameter_name = node_prefix + parameter_name_std;
+
+		const std::regex uniform_regex("\\buniform\\s+(float|int|bool)\\s+" + namespaced_parameter_name + "\\s*;");
+		const StdString glsl_type = get_glsl_type_name(parameter_type);
+		const StdString literal = get_glsl_literal(get_parameter_value(parameter_name), parameter_type);
+		const std::string replacement = "const " + std::string(glsl_type.c_str()) + " " + namespaced_parameter_name +
+				" = " + literal.c_str() + ";";
+		source = std::regex_replace(source, uniform_regex, replacement);
+	}
+
+	const StdString entry_point_tmp = zylann::godot::to_std_string(get_entry_point());
+	const std::string entry_point(entry_point_tmp.c_str());
+	result.function_name = (node_prefix + entry_point).c_str();
+
+	const std::regex function_regex("\\bvoid\\s+" + std::string(result.function_name.c_str()) + "\\s*\\(");
+	if (!std::regex_search(source, function_regex)) {
+		result.error = String("ScriptGraphNode GLSL entry point `{0}` was not found.").format(varray(get_entry_point()));
+		return result;
+	}
+
+	result.source_code = source.c_str();
+	result.success = true;
+	return result;
 }
 
 void VoxelGraphScriptNode::generate(Dictionary inputs, Dictionary outputs) {
