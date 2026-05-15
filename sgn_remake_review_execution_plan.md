@@ -220,7 +220,7 @@ Completion notes:
 
 ## Task 3: Keep Subtitle UX But Make It Robust
 
-Status: [ ]
+Status: [x]
 
 Priority: high.
 
@@ -269,8 +269,8 @@ Verification:
 
 Completion notes:
 
-- Completed:
-- Verified:
+- Completed: removed recursive `GraphNode` titlebar child probing, internal title label reparenting, and subtitle lookup constants from `editor/graph/voxel_graph_editor_node.cpp`; `VoxelGraphEditorNode` now owns a subtitle `Label`, shows/hides it for empty subtitles, and offsets owned row slots when the subtitle control exists.
+- Verified: ran `rg -n "find_graph_node_title_label|TITLE_CONTAINER_NAME|SUBTITLE_LABEL_NAME|get_node_subtitle|update_subtitle|update_title" editor/graph generators/graph`; remaining subtitle hits are the owned-control update path and `VoxelGraphFunction::get_node_subtitle()`. Ran `scons platform=windows target=editor voxel_tests=yes dev_build=yes debug_symbols=yes` successfully. Ran `bin\godot.windows.editor.dev.x86_64.console.exe --path modules\voxel\project res://tests/runner.tscn`; it reached `------------ Voxel tests end -------------` including all SGN tests.
 
 ## Task 4: Keep Dynamic Runtime Port Handling Minimal
 
@@ -626,7 +626,7 @@ Agents should pick one of these batches, not the whole plan.
 
 - [x] Terrain regeneration handlers do not downcast generators.
 - [x] Broad shutdown/mesh/physics lifetime changes are removed or explicitly split out.
-- [ ] Required SGN subtitle UI no longer relies on internal `GraphNode` child traversal.
+- [x] Required SGN subtitle UI no longer relies on internal `GraphNode` child traversal.
 - [ ] Compiler/runtime SGN dynamic-port handling is small, localized, and easy to justify.
 - [ ] Output hash SGN revision handling is minimal or deferred.
 - [ ] Dynamic output serialization is minimal and clearly justified.

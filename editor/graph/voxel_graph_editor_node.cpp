@@ -5,7 +5,6 @@
 #include "../../util/godot/classes/label.h"
 #include "../../util/godot/classes/node.h"
 #include "../../util/godot/classes/style_box_empty.h"
-#include "../../util/godot/classes/v_box_container.h"
 #include "../../util/godot/core/array.h"
 #include "../../util/godot/core/string_name.h"
 #include "../../util/godot/core/version.h"
@@ -19,26 +18,6 @@ namespace zylann::voxel {
 using namespace pg;
 
 static const Color PORT_COLOR(0.4, 0.4, 1.0);
-static const char *TITLE_CONTAINER_NAME = "_title_container";
-static const char *SUBTITLE_LABEL_NAME = "_subtitle";
-
-Label *find_graph_node_title_label(Node *node) {
-	for (int i = 0; i < node->get_child_count(); ++i) {
-		Node *child = node->get_child(i);
-		if (String(child->get_name()) == SUBTITLE_LABEL_NAME) {
-			continue;
-		}
-		Label *label = Object::cast_to<Label>(child);
-		if (label != nullptr) {
-			return label;
-		}
-		Label *descendant_label = find_graph_node_title_label(child);
-		if (descendant_label != nullptr) {
-			return descendant_label;
-		}
-	}
-	return nullptr;
-}
 
 VoxelGraphEditorNode *VoxelGraphEditorNode::create(const VoxelGraphFunction &graph, uint32_t node_id) {
 	VoxelGraphEditorNode *node_view = memnew(VoxelGraphEditorNode);
@@ -166,6 +145,7 @@ void VoxelGraphEditorNode::update_layout(const VoxelGraphFunction &graph) {
 	// }
 
 	// Add inputs and outputs
+	const unsigned int first_row_slot_index = _subtitle_label == nullptr ? 0 : 1;
 	for (unsigned int slot_index = 0; slot_index < row_count; ++slot_index) {
 		const bool has_left = slot_index < inputs.size();
 		const bool has_right = (slot_index < outputs.size()) && !hide_outputs;
@@ -210,7 +190,15 @@ void VoxelGraphEditorNode::update_layout(const VoxelGraphFunction &graph) {
 		}
 
 		add_child(property_control);
-		set_slot(slot_index, has_left, Variant::FLOAT, PORT_COLOR, has_right, Variant::FLOAT, PORT_COLOR);
+		set_slot(
+				first_row_slot_index + slot_index,
+				has_left,
+				Variant::FLOAT,
+				PORT_COLOR,
+				has_right,
+				Variant::FLOAT,
+				PORT_COLOR
+		);
 		_rows.push_back(property_control);
 	}
 
@@ -274,52 +262,24 @@ void VoxelGraphEditorNode::update_subtitle(const VoxelGraphFunction &graph, uint
 	const String subtitle = graph.get_node_subtitle(node_id);
 	if (subtitle.is_empty()) {
 		if (_subtitle_label != nullptr) {
-			_subtitle_label->queue_free();
-			_subtitle_label = nullptr;
+			_subtitle_label->set_text("");
+			_subtitle_label->hide();
 		}
 		return;
 	}
 
-	Node *titlebar = get_titlebar_hbox();
-	ERR_FAIL_COND(titlebar == nullptr);
-
 	if (_subtitle_label == nullptr) {
-		Label *existing_label = Object::cast_to<Label>(titlebar->find_child(SUBTITLE_LABEL_NAME, true, false));
-		if (existing_label != nullptr) {
-			_subtitle_label = existing_label;
-		} else {
-			VBoxContainer *title_container =
-					Object::cast_to<VBoxContainer>(titlebar->find_child(TITLE_CONTAINER_NAME, true, false));
-			if (title_container == nullptr) {
-				title_container = memnew(VBoxContainer);
-				title_container->set_name(TITLE_CONTAINER_NAME);
-				title_container->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
-
-				Label *graph_title_label = find_graph_node_title_label(titlebar);
-				if (graph_title_label != nullptr) {
-					Node *title_label_parent = graph_title_label->get_parent();
-					const int title_label_index = graph_title_label->get_index();
-					title_container->set_h_size_flags(graph_title_label->get_h_size_flags());
-					title_label_parent->remove_child(graph_title_label);
-					title_label_parent->add_child(title_container);
-					title_label_parent->move_child(title_container, title_label_index);
-					title_container->add_child(graph_title_label);
-				} else {
-					titlebar->add_child(title_container);
-				}
-			}
-
-			_subtitle_label = memnew(Label);
-			_subtitle_label->set_name(SUBTITLE_LABEL_NAME);
-			_subtitle_label->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
-			_subtitle_label->set_modulate(Color(1.f, 1.f, 1.f, 0.65f));
-			_subtitle_label->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-			_subtitle_label->add_theme_font_size_override("font_size", int(12.f * EDSCALE));
-			title_container->add_child(_subtitle_label);
-		}
+		_subtitle_label = memnew(Label);
+		_subtitle_label->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
+		_subtitle_label->set_modulate(Color(1.f, 1.f, 1.f, 0.65f));
+		_subtitle_label->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+		_subtitle_label->add_theme_font_size_override("font_size", int(12.f * EDSCALE));
+		add_child(_subtitle_label);
+		move_child(_subtitle_label, 0);
 	}
 
 	_subtitle_label->set_text(subtitle);
+	_subtitle_label->show();
 }
 
 void VoxelGraphEditorNode::poll(const VoxelGraphFunction &graph) {
