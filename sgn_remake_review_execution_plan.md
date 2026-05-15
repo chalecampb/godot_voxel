@@ -325,7 +325,7 @@ Completion notes:
 
 ## Task 5: Shrink Dynamic Port Serialization And Remap
 
-Status: [ ]
+Status: [x]
 
 Priority: medium-high.
 
@@ -369,8 +369,8 @@ test_voxel_graph_script_node_port_refresh
 
 Completion notes:
 
-- Completed:
-- Verified:
+- Completed: replaced SGN-named saved-port parsing helpers in `generators/graph/voxel_graph_function.cpp` with generic `dynamic_inputs`/`dynamic_outputs` saved-name helpers used by both SGN load recovery and connection remap; kept the existing save format while making the local patch 23 net lines smaller.
+- Verified: ran `git diff --numstat master...HEAD -- generators/graph/voxel_graph_function.cpp` and `git diff --stat -- generators/graph/voxel_graph_function.cpp`; this task changes `voxel_graph_function.cpp` by 44 insertions and 67 deletions. Ran `scons platform=windows target=editor voxel_tests=yes dev_build=yes debug_symbols=yes` successfully after stopping stale Godot processes that were locking the editor binary. Ran `bin\godot.windows.editor.dev.x86_64.console.exe --path modules\voxel\project res://tests/runner.tscn`; it reached `------------ Voxel tests end -------------`, including `test_voxel_graph_functions_pass_through`, `test_voxel_graph_functions_nested_pass_through`, `test_voxel_graph_functions_io_mismatch`, `test_voxel_graph_script_node_copy_keeps_connections_after_reload`, and `test_voxel_graph_script_node_port_refresh`.
 
 ## Task 6: Minimize Or Defer SGN Output Hash Cleanup
 
@@ -629,7 +629,7 @@ Agents should pick one of these batches, not the whole plan.
 - [x] Required SGN subtitle UI no longer relies on internal `GraphNode` child traversal.
 - [x] Compiler/runtime SGN dynamic-port handling is small, localized, and easy to justify.
 - [ ] Output hash SGN revision handling is minimal or deferred.
-- [ ] Dynamic output serialization is minimal and clearly justified.
+- [x] Dynamic output serialization is minimal and clearly justified.
 - [ ] Shader generation SGN special-casing is reduced, localized, or documented as the remaining exception.
 - [ ] SGN resource and test diffs have been reviewed for MVP scope.
 - [x] SGN tests pass.

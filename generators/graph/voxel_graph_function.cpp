@@ -1161,8 +1161,8 @@ Dictionary get_graph_as_variant_data(const ProgramGraph &graph) {
 			node_data["dynamic_inputs"] = dynamic_inputs_data;
 		}
 
-		// Dynamic outputs. Order matters. ScriptGraphNode uses this to remap saved numeric connections by name if
-		// the script contract changes before the graph is loaded again.
+		// Dynamic outputs. Order matters, it lets saved numeric connections be remapped by port name if a dynamic
+		// port contract changes before the graph is loaded again.
 		Array dynamic_outputs_data;
 		for (size_t j = 0; j < node->outputs.size(); ++j) {
 			const ProgramGraph::Port &port = node->outputs[j];
@@ -1217,47 +1217,57 @@ bool var_to_id(Variant v, uint32_t &out_id, uint32_t min = 0) {
 	return true;
 }
 
+bool try_get_saved_dynamic_port_name(const Dictionary &node_data, uint32_t port_index, bool output, String &out_name) {
+	const String key = output ? "dynamic_outputs" : "dynamic_inputs";
+	if (!node_data.has(key)) {
+		return false;
+	}
+
+	const Array ports_data = node_data[key];
+	if (port_index >= static_cast<uint32_t>(ports_data.size())) {
+		out_name = String();
+		return true;
+	}
+
+	if (output) {
+		out_name = ports_data[port_index];
+		return true;
+	}
+
+	const Array d = ports_data[port_index];
+	if (d.size() < 1) {
+		out_name = String();
+		return true;
+	}
+	out_name = d[0];
+	return true;
+}
+
 void recover_script_graph_port_names_from_graph_data(Ref<VoxelGraphScriptNode> script_node, const Dictionary &node_data) {
 	ERR_FAIL_COND(script_node.is_null());
 
 	const Span<const Ref<VoxelGraphScriptNodePort>> input_ports = script_node->get_input_ports();
-	if (node_data.has("dynamic_inputs")) {
-		const Array dynamic_inputs_data = node_data["dynamic_inputs"];
-		const int count = math::min(dynamic_inputs_data.size(), static_cast<int>(input_ports.size()));
-		for (int i = 0; i < count; ++i) {
-			const Ref<VoxelGraphScriptNodePort> &port = input_ports[i];
-			if (port.is_null() || !port->get_port_name().is_empty()) {
-				continue;
-			}
-			const Array d = dynamic_inputs_data[i];
-			if (d.size() < 1) {
-				continue;
-			}
-			const String saved_name = d[0];
-			if (!saved_name.is_empty()) {
-				port->set_port_name(saved_name);
-			}
+	for (uint32_t i = 0; i < input_ports.size(); ++i) {
+		const Ref<VoxelGraphScriptNodePort> &port = input_ports[i];
+		String saved_name;
+		if (port.is_valid() && port->get_port_name().is_empty() &&
+				try_get_saved_dynamic_port_name(node_data, i, false, saved_name) && !saved_name.is_empty()) {
+			port->set_port_name(saved_name);
 		}
 	}
 
 	const Span<const Ref<VoxelGraphScriptNodePort>> output_ports = script_node->get_output_ports();
-	if (node_data.has("dynamic_outputs")) {
-		const Array dynamic_outputs_data = node_data["dynamic_outputs"];
-		const int count = math::min(dynamic_outputs_data.size(), static_cast<int>(output_ports.size()));
-		for (int i = 0; i < count; ++i) {
-			const Ref<VoxelGraphScriptNodePort> &port = output_ports[i];
-			if (port.is_null() || !port->get_port_name().is_empty()) {
-				continue;
-			}
-			const String saved_name = dynamic_outputs_data[i];
-			if (!saved_name.is_empty()) {
-				port->set_port_name(saved_name);
-			}
+	for (uint32_t i = 0; i < output_ports.size(); ++i) {
+		const Ref<VoxelGraphScriptNodePort> &port = output_ports[i];
+		String saved_name;
+		if (port.is_valid() && port->get_port_name().is_empty() &&
+				try_get_saved_dynamic_port_name(node_data, i, true, saved_name) && !saved_name.is_empty()) {
+			port->set_port_name(saved_name);
 		}
 	}
 }
 
-bool try_get_saved_script_node_port_name(
+bool try_get_saved_dynamic_port_name(
 		const Dictionary &nodes_data,
 		ProgramGraph::PortLocation loc,
 		bool output,
@@ -1267,51 +1277,18 @@ bool try_get_saved_script_node_port_name(
 	if (!nodes_data.has(node_key)) {
 		return false;
 	}
-
 	const Dictionary node_data = nodes_data[node_key];
-	const String type_name = node_data.get("type", String());
-	if (type_name != "ScriptGraphNode") {
-		return false;
-	}
-
-	if (output) {
-		if (!node_data.has("dynamic_outputs")) {
-			return false;
-		}
-		const Array dynamic_outputs_data = node_data["dynamic_outputs"];
-		if (loc.port_index >= static_cast<uint32_t>(dynamic_outputs_data.size())) {
-			out_name = String();
-			return true;
-		}
-		out_name = dynamic_outputs_data[loc.port_index];
-		return true;
-	}
-
-	if (!node_data.has("dynamic_inputs")) {
-		return false;
-	}
-	const Array dynamic_inputs_data = node_data["dynamic_inputs"];
-	if (loc.port_index >= static_cast<uint32_t>(dynamic_inputs_data.size())) {
-		out_name = String();
-		return true;
-	}
-	const Array d = dynamic_inputs_data[loc.port_index];
-	if (d.size() < 1) {
-		out_name = String();
-		return true;
-	}
-	out_name = d[0];
-	return true;
+	return try_get_saved_dynamic_port_name(node_data, loc.port_index, output, out_name);
 }
 
-bool remap_script_node_port_by_saved_name(
+bool remap_dynamic_port_by_saved_name(
 		const ProgramGraph &graph,
 		ProgramGraph::PortLocation &loc,
 		bool output,
 		const Dictionary &nodes_data
 ) {
 	String saved_name;
-	if (!try_get_saved_script_node_port_name(nodes_data, loc, output, saved_name)) {
+	if (!try_get_saved_dynamic_port_name(nodes_data, loc, output, saved_name)) {
 		return true;
 	}
 	if (saved_name.is_empty()) {
@@ -1487,8 +1464,8 @@ bool load_graph_from_variant_data(ProgramGraph &graph, Dictionary data, String r
 		ERR_FAIL_COND_V(!var_to_id(con_data[1], src.port_index), false);
 		ERR_FAIL_COND_V(!var_to_id(con_data[2], dst.node_id, ProgramGraph::NULL_ID), false);
 		ERR_FAIL_COND_V(!var_to_id(con_data[3], dst.port_index), false);
-		if (!remap_script_node_port_by_saved_name(graph, src, true, nodes_data) ||
-				!remap_script_node_port_by_saved_name(graph, dst, false, nodes_data)) {
+		if (!remap_dynamic_port_by_saved_name(graph, src, true, nodes_data) ||
+				!remap_dynamic_port_by_saved_name(graph, dst, false, nodes_data)) {
 			ERR_PRINT(
 					String("Dropping invalid graph connection from node {0} port {1} to node {2} port {3}.")
 							.format(varray(src.node_id, src.port_index, dst.node_id, dst.port_index))
