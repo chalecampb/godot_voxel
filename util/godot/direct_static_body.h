@@ -3,9 +3,10 @@
 
 #include "../non_copyable.h"
 #include "classes/shape_3d.h"
-#include "classes/world_3d.h"
 #include "direct_mesh_instance.h"
 #include "macros.h"
+
+ZN_GODOT_FORWARD_DECLARE(class World3D);
 
 namespace zylann::godot {
 
@@ -22,7 +23,7 @@ public:
 	void add_shape(Ref<Shape3D> shape);
 	void remove_shape(int shape_index);
 	Ref<Shape3D> get_shape(int shape_index) const;
-	void set_world(Ref<World3D> world);
+	void set_world(World3D *world);
 	void set_shape_enabled(int shape_index, bool disabled);
 	void set_attached_object(const Object *obj);
 	void set_collision_layer(int layer);

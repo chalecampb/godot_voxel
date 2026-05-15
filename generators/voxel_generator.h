@@ -189,7 +189,7 @@ public:
 
 	virtual void clear_cache();
 
-	void request_regeneration();
+	virtual void request_regeneration();
 
 	// Editor
 

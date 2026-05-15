@@ -4,7 +4,6 @@
 #include "../engine/voxel_engine.h"
 #include "../util/containers/std_unordered_map.h"
 #include "../util/containers/std_vector.h"
-#include "../util/godot/classes/world_3d.h"
 #include "../util/macros.h"
 
 namespace zylann::voxel {
@@ -181,7 +180,6 @@ private:
 			MeshBlock_T *block = nullptr;
 		};
 		ERR_FAIL_COND(block == nullptr);
-		block->set_world(Ref<World3D>());
 		FreeMeshBlockTask *task = ZN_NEW(FreeMeshBlockTask);
 		task->block = block;
 		VoxelEngine::get_singleton().push_main_thread_time_spread_task(task);

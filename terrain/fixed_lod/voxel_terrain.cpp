@@ -6,7 +6,6 @@
 #include "../../engine/voxel_engine.h"
 #include "../../engine/voxel_engine_updater.h"
 #include "../../generators/generate_block_task.h"
-#include "../../generators/graph/voxel_generator_graph.h"
 #include "../../meshers/blocky/voxel_mesher_blocky.h"
 #include "../../meshers/mesh_block_task.h"
 #include "../../storage/voxel_buffer_gd.h"
@@ -219,26 +218,6 @@ Ref<VoxelGenerator> VoxelTerrain::get_generator() const {
 }
 
 void VoxelTerrain::_on_generator_regeneration_requested() {
-	Ref<VoxelGenerator> generator = get_generator();
-	ERR_FAIL_COND(generator.is_null());
-
-	VoxelGeneratorGraph *graph_generator = Object::cast_to<VoxelGeneratorGraph>(*generator);
-	if (graph_generator != nullptr) {
-		const pg::CompilationResult result = graph_generator->compile(true);
-		if (!result.success) {
-			ERR_PRINT(
-					String("Graph compilation failed before terrain regeneration: {0}").format(varray(result.message))
-			);
-			return;
-		}
-	}
-
-#ifdef VOXEL_ENABLE_GPU
-	if (get_generator_use_gpu() && generator->supports_shaders()) {
-		generator->compile_shaders();
-	}
-#endif
-
 	restart_stream();
 }
 

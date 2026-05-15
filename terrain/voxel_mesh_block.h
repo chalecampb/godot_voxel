@@ -80,7 +80,7 @@ protected:
 	void _set_visible(bool visible);
 
 	inline void set_mesh_instance_visible(zylann::godot::DirectMeshInstance &mi, bool visible) {
-		if (visible && _world.is_valid()) {
+		if (visible) {
 			mi.set_world(*_world);
 		} else {
 			mi.set_world(nullptr);

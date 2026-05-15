@@ -1325,6 +1325,16 @@ pg::CompilationResult VoxelGeneratorGraph::compile(bool debug) {
 	return result;
 }
 
+void VoxelGeneratorGraph::request_regeneration() {
+	const pg::CompilationResult result = compile(true);
+	if (!result.success) {
+		ERR_PRINT(String("Graph compilation failed before regeneration: {0}").format(varray(result.message)));
+		return;
+	}
+
+	VoxelGenerator::request_regeneration();
+}
+
 // This is an external API which involves locking so better not use this internally
 bool VoxelGeneratorGraph::is_good() const {
 	RWLockRead rlock(_runtime_lock);
