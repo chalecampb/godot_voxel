@@ -34,19 +34,34 @@ void Runtime::clear() {
 
 namespace {
 
+struct OperationPortCounts {
+	uint32_t inputs;
+	uint32_t outputs;
+};
+
+OperationPortCounts read_operation_port_counts(
+		Span<const uint16_t> operations,
+		uint32_t &pc,
+		const NodeType &node_type,
+		uint16_t opid
+) {
+	if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+		return OperationPortCounts{ operations[pc++], operations[pc++] };
+	}
+	return OperationPortCounts{
+		static_cast<uint32_t>(node_type.inputs.size()),
+		static_cast<uint32_t>(node_type.outputs.size())
+	};
+}
+
 Span<const uint16_t> get_outputs_from_op_address(Span<const uint16_t> operations, uint16_t op_address) {
 	uint32_t pc = op_address;
 	const uint16_t opid = operations[pc++];
 	const NodeType &node_type = NodeTypeDB::get_singleton().get_type(opid);
 
-	uint32_t inputs_count = node_type.inputs.size();
-	uint32_t outputs_count = node_type.outputs.size();
-	if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
-		inputs_count = operations[pc++];
-		outputs_count = operations[pc++];
-	}
+	const OperationPortCounts port_counts = read_operation_port_counts(operations, pc, node_type, opid);
 
-	return operations.sub(pc + inputs_count, outputs_count);
+	return operations.sub(pc + port_counts.inputs, port_counts.outputs);
 }
 
 } // namespace
@@ -492,17 +507,12 @@ void Runtime::generate_set(
 		const uint16_t opid = operations[pc++];
 		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(opid);
 
-		uint32_t inputs_count = node_type.inputs.size();
-		uint32_t outputs_count = node_type.outputs.size();
-		if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
-			inputs_count = operations[pc++];
-			outputs_count = operations[pc++];
-		}
+		const OperationPortCounts port_counts = read_operation_port_counts(operations, pc, node_type, opid);
 
-		const Span<const uint16_t> op_inputs = operations.sub(pc, inputs_count);
-		pc += inputs_count;
-		const Span<const uint16_t> op_outputs = operations.sub(pc, outputs_count);
-		pc += outputs_count;
+		const Span<const uint16_t> op_inputs = operations.sub(pc, port_counts.inputs);
+		pc += port_counts.inputs;
+		const Span<const uint16_t> op_outputs = operations.sub(pc, port_counts.outputs);
+		pc += port_counts.outputs;
 
 		Span<const uint8_t> op_params = read_params(operations, pc);
 
@@ -559,17 +569,12 @@ void Runtime::analyze_range(State &state, Span<const math::Interval> p_inputs) c
 		const uint16_t opid = operations[pc++];
 		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(opid);
 
-		uint32_t inputs_count = node_type.inputs.size();
-		uint32_t outputs_count = node_type.outputs.size();
-		if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
-			inputs_count = operations[pc++];
-			outputs_count = operations[pc++];
-		}
+		const OperationPortCounts port_counts = read_operation_port_counts(operations, pc, node_type, opid);
 
-		const Span<const uint16_t> op_inputs = operations.sub(pc, inputs_count);
-		pc += inputs_count;
-		const Span<const uint16_t> op_outputs = operations.sub(pc, outputs_count);
-		pc += outputs_count;
+		const Span<const uint16_t> op_inputs = operations.sub(pc, port_counts.inputs);
+		pc += port_counts.inputs;
+		const Span<const uint16_t> op_outputs = operations.sub(pc, port_counts.outputs);
+		pc += port_counts.outputs;
 
 		Span<const uint8_t> op_params = read_params(operations, pc);
 
@@ -596,17 +601,12 @@ void Runtime::debug_print_operations() {
 		const uint16_t opid = operations[pc++];
 		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(opid);
 
-		uint32_t inputs_count = node_type.inputs.size();
-		uint32_t outputs_count = node_type.outputs.size();
-		if (opid == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
-			inputs_count = operations[pc++];
-			outputs_count = operations[pc++];
-		}
+		const OperationPortCounts port_counts = read_operation_port_counts(operations, pc, node_type, opid);
 
-		const Span<const uint16_t> inputs = operations.sub(pc, inputs_count);
-		pc += inputs_count;
-		const Span<const uint16_t> outputs = operations.sub(pc, outputs_count);
-		pc += outputs_count;
+		const Span<const uint16_t> inputs = operations.sub(pc, port_counts.inputs);
+		pc += port_counts.inputs;
+		const Span<const uint16_t> outputs = operations.sub(pc, port_counts.outputs);
+		pc += port_counts.outputs;
 
 		Span<const uint8_t> params = read_params(operations, pc);
 

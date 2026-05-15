@@ -274,7 +274,7 @@ Completion notes:
 
 ## Task 4: Keep Dynamic Runtime Port Handling Minimal
 
-Status: [ ]
+Status: [x]
 
 Priority: medium.
 
@@ -320,8 +320,8 @@ test_voxel_graph_get_io_indices
 
 Completion notes:
 
-- Completed:
-- Verified:
+- Completed: centralized runtime operation port-count decoding in `generators/graph/voxel_graph_runtime.cpp` with a small local helper; the only runtime `NODE_SCRIPT_GRAPH` check now reads the encoded dynamic input/output counts. Left compiler-side checks local because they are already limited to count encoding/static-node assertions and broader abstraction would grow the diff.
+- Verified: ran `rg -n "NODE_SCRIPT_GRAPH" generators/graph/voxel_graph_compiler.cpp generators/graph/voxel_graph_runtime.cpp`; hits are limited to runtime dynamic count decoding, compiler static-node assertions/count selection, and encoded output-count allocation. Ran `scons platform=windows target=editor voxel_tests=yes dev_build=yes debug_symbols=yes` successfully. Ran `bin\godot.windows.editor.dev.x86_64.console.exe --path modules\voxel\project res://tests/runner.tscn`; it reached `------------ Voxel tests end -------------`, including the SGN CPU/port/shader tests and existing non-SGN graph tests such as `test_voxel_graph_get_io_indices`, `test_voxel_graph_function_execute`, and `test_voxel_graph_hash`.
 
 ## Task 5: Shrink Dynamic Port Serialization And Remap
 
@@ -627,7 +627,7 @@ Agents should pick one of these batches, not the whole plan.
 - [x] Terrain regeneration handlers do not downcast generators.
 - [x] Broad shutdown/mesh/physics lifetime changes are removed or explicitly split out.
 - [x] Required SGN subtitle UI no longer relies on internal `GraphNode` child traversal.
-- [ ] Compiler/runtime SGN dynamic-port handling is small, localized, and easy to justify.
+- [x] Compiler/runtime SGN dynamic-port handling is small, localized, and easy to justify.
 - [ ] Output hash SGN revision handling is minimal or deferred.
 - [ ] Dynamic output serialization is minimal and clearly justified.
 - [ ] Shader generation SGN special-casing is reduced, localized, or documented as the remaining exception.
