@@ -71,13 +71,13 @@ Before taking a task, capture the starting point.
   Completed: confirmed Task 1 and Task 2 files were present in the branch diff.
 - [x] Check whether a built editor binary already exists under the outer Godot `bin/` directory.
   Completed: `bin/godot.windows.editor.dev.x86_64.console.exe` existed before rebuilding.
-- [ ] Prefer a compile check after code changes:
+- [x] Prefer a compile check after code changes:
 
 ```powershell
 scons platform=windows target=editor voxel_tests=yes
 ```
 
-- [ ] Prefer targeted SGN tests after graph/runtime/editor changes. The SGN test names are:
+- [x] Prefer targeted SGN tests after graph/runtime/editor changes. The SGN test names are:
 
 ```text
 test_voxel_graph_sgn_load_script_contract
@@ -95,6 +95,9 @@ test_voxel_graph_editor_create_dynamic_layout_node
 `VoxelEngine.run_tests({"includes": [...]})` supports running only named tests. If no targeted test runner script exists in the checkout, add a temporary local script for verification and do not commit it.
 
 Known baseline caveat from `sgn_remake_audit.md`: full `--run_voxel_tests` may fail earlier in `test_block_serializer_stream_peer`, before SGN tests. If reproducing that, record it as pre-existing and do not treat it as an SGN regression.
+
+Completed: reran the requested editor build after Task 6 review; SCons reported the target up to date.
+Verified: `scons platform=windows target=editor voxel_tests=yes dev_build=yes debug_symbols=yes`.
 
 ## Task 1: Move Regeneration Preparation Into The Generator
 
@@ -374,7 +377,7 @@ Completion notes:
 
 ## Task 6: Minimize Or Defer SGN Output Hash Cleanup
 
-Status: [ ]
+Status: [x]
 
 Priority: low-medium.
 
@@ -415,8 +418,8 @@ test_voxel_graph_sgn_shader_path_property
 
 Completion notes:
 
-- Completed:
-- Verified:
+- Completed: reviewed `VoxelGraphFunction::get_output_graph_hash()` and kept the existing direct SGN `get_revision()` contribution because it is the smallest local behavior and no `NodeType` hash callback/infrastructure exists in the branch. This preserves SGN live-update hash invalidation while keeping non-SGN object-param deep hashing unchanged.
+- Verified: ran `rg -n "NODE_SCRIPT_GRAPH|get_revision" generators/graph/voxel_graph_function.cpp generators/graph/nodes/misc.h`; the revision hash contribution remains a small local branch in `get_output_graph_hash()`. Ran `scons platform=windows target=editor voxel_tests=yes dev_build=yes debug_symbols=yes`; SCons completed successfully and reported the target up to date. Ran `bin\godot.windows.editor.dev.x86_64.console.exe --path modules\voxel\project res://tests/runner.tscn` with output redirected and stopped the process after the expected `------------ Voxel tests end -------------` marker; the run included `test_voxel_graph_hash`, `test_voxel_graph_script_node_port_refresh`, `test_voxel_graph_sgn_shader_path_property`, and all SGN tests.
 
 ## Task 7: Shrink SGN Shader Generation
 
@@ -628,7 +631,7 @@ Agents should pick one of these batches, not the whole plan.
 - [x] Broad shutdown/mesh/physics lifetime changes are removed or explicitly split out.
 - [x] Required SGN subtitle UI no longer relies on internal `GraphNode` child traversal.
 - [x] Compiler/runtime SGN dynamic-port handling is small, localized, and easy to justify.
-- [ ] Output hash SGN revision handling is minimal or deferred.
+- [x] Output hash SGN revision handling is minimal or deferred.
 - [x] Dynamic output serialization is minimal and clearly justified.
 - [ ] Shader generation SGN special-casing is reduced, localized, or documented as the remaining exception.
 - [ ] SGN resource and test diffs have been reviewed for MVP scope.
