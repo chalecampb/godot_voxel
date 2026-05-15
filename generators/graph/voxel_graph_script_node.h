@@ -134,6 +134,7 @@ private:
 	void register_child_resources();
 	void unregister_child_resources();
 	void _on_child_resource_changed();
+	void clear_contract(String script_path, String error_message);
 	void emit_changed_deferred();
 	void set_change_notifications_suppressed(bool suppressed);
 	void clear_validation();

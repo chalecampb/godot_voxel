@@ -376,6 +376,22 @@ void VoxelGraphScriptNode::_on_child_resource_changed() {
 	emit_changed_deferred();
 }
 
+void VoxelGraphScriptNode::clear_contract(String script_path, String error_message) {
+	set_script(Variant());
+	_script_path = script_path;
+	unregister_child_resources();
+	_inputs.clear();
+	_outputs.clear();
+	_parameters.clear();
+	register_child_resources();
+	clear_validation();
+	if (!error_message.is_empty()) {
+		add_error(error_message);
+	}
+	increment_revision();
+	emit_changed_deferred();
+}
+
 void VoxelGraphScriptNode::emit_changed_deferred() {
 	if (_suppress_change_notifications) {
 		_has_deferred_change_notification = true;
@@ -418,16 +434,7 @@ String VoxelGraphScriptNode::get_script_path() const {
 void VoxelGraphScriptNode::set_attached_script(Variant script) {
 	Ref<Script> script_ref = script;
 	if (script_ref.is_null()) {
-		set_script(Variant());
-		_script_path = String();
-		unregister_child_resources();
-		_inputs.clear();
-		_outputs.clear();
-		_parameters.clear();
-		register_child_resources();
-		clear_validation();
-		increment_revision();
-		emit_changed_deferred();
+		clear_contract(String(), String());
 		return;
 	}
 	reload_script_contract(script_ref->get_path());
@@ -443,34 +450,14 @@ bool VoxelGraphScriptNode::reload_script_contract(String script_path) {
 	Ref<Script> script = resource;
 
 	if (script.is_null()) {
-		set_script(Variant());
-		_script_path = script_path;
-		unregister_child_resources();
-		_inputs.clear();
-		_outputs.clear();
-		_parameters.clear();
-		register_child_resources();
-		clear_validation();
-		add_error(String("Could not load GDScript `{0}`.").format(varray(script_path)));
-		increment_revision();
-		emit_changed_deferred();
+		clear_contract(script_path, String("Could not load GDScript `{0}`.").format(varray(script_path)));
 		return false;
 	}
 
 	Variant script_node_instance_variant = script->call("new");
 	Ref<VoxelGraphScriptNode> script_node_instance = script_node_instance_variant;
 	if (script_node_instance.is_null()) {
-		set_script(Variant());
-		_script_path = script_path;
-		unregister_child_resources();
-		_inputs.clear();
-		_outputs.clear();
-		_parameters.clear();
-		register_child_resources();
-		clear_validation();
-		add_error(String("GDScript `{0}` must extend VoxelGraphScriptNode.").format(varray(script_path)));
-		increment_revision();
-		emit_changed_deferred();
+		clear_contract(script_path, String("GDScript `{0}` must extend VoxelGraphScriptNode.").format(varray(script_path)));
 		return false;
 	}
 

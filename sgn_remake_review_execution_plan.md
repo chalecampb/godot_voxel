@@ -423,7 +423,7 @@ Completion notes:
 
 ## Task 7: Shrink SGN Shader Generation
 
-Status: [ ]
+Status: [x]
 
 Priority: medium.
 
@@ -470,8 +470,8 @@ test_voxel_graph_sgn_shader_path_property
 
 Completion notes:
 
-- Completed:
-- Verified:
+- Completed: reviewed the SGN resource MVP surface and kept the existing public API because it is used by the graph editor assignment/reload path, runtime CPU execution, shader generation, serialization, GDScript contract loading, or tests. Reduced repeated failed/empty script cleanup in `generators/graph/voxel_graph_script_node.cpp` by adding a private `clear_contract()` helper shared by empty script assignment and script load failure paths; no public API was added or removed.
+- Verified: ran `git diff --stat -- generators/graph/voxel_graph_script_node.cpp generators/graph/voxel_graph_script_node.h`; the task changes those files by 20 insertions and 32 deletions. Ran `rg -n "StdVector<std::string>|std::string" generators/graph/voxel_graph_script_node.cpp generators/graph/voxel_graph_shader_generator.cpp`; remaining `std::string` use is local to regex/string rewriting helpers. Ran `scons platform=windows target=editor voxel_tests=yes dev_build=yes debug_symbols=yes`; the first link attempt failed because stale Godot editor/test processes locked the output executable, then passed after stopping those processes. Ran `bin\godot.windows.editor.dev.x86_64.console.exe --path modules\voxel\project res://tests/runner.tscn` with output redirected and stopped the process after the expected `------------ Voxel tests end -------------` marker; the run included SGN contract, CPU execution, port refresh, copy/reload, and shader compilation tests.
 
 ## Task 8: Shrink The SGN Resource Contract
 
