@@ -6,14 +6,14 @@ The previous reference audit is `sgn_remake_reference_audit.txt`. That document 
 
 ## Effective Patch Summary
 
-The cleaned `sgn_remake_noclip` branch is intentionally reduced to five labeled commits. The table below is the authoritative map from each commit label to the effective final changes it carries.
+The cleaned `sgn_remake_noclip` branch is intentionally reduced to the SGN resource, graph integration, editor workflow, shader integration, docs, and tests. The table below maps the original commit labels to the effective final changes they now carry after the review cleanup commits.
 
 | Commit label | Scope | Files |
 | --- | --- | --- |
 | `SGN: add script graph node resource` | Defines and registers the SGN resource contract: script loading, exported parameters, dynamic ports, GLSL path, validation state, GPU compatibility, CPU execution, and release-scope resource classes. | `generators/graph/voxel_graph_script_node.h`, `generators/graph/voxel_graph_script_node.cpp`, `register_types.cpp` |
 | `SGN: integrate dynamic graph runtime node` | Adds `ScriptGraphNode` to the generator graph model/runtime: `Misc` category, dynamic port setup and refresh, copy/serialization connection preservation, SGN graph hash invalidation, dynamic compiled op counts, runtime/range/debug count handling, and safe connection checks during port remapping. | `generators/graph/node_type_db.h`, `generators/graph/nodes/misc.h`, `generators/graph/program_graph.cpp`, `generators/graph/voxel_graph_compiler.cpp`, `generators/graph/voxel_graph_function.h`, `generators/graph/voxel_graph_function.cpp`, `generators/graph/voxel_graph_runtime.cpp` |
-| `SGN: generate shaders from script graph nodes` | Adds GPU shader generation for SGN: external GLSL loading, compatibility validation, per-node namespacing, SGN parameter constant substitution, SGN call emission, and shader-library deduplication by string content. | `generators/graph/voxel_graph_shader_generator.cpp`, `generators/graph/code_gen_helper.h`, `generators/graph/code_gen_helper.cpp` |
-| `SGN: refresh editor nodes and script reloads` | Adds editor workflow support: dynamic layout rebuilds, subtitle refresh, inspector script/path/parameter properties, explicit reload hooks for GDScript and GLSL, cache-replacing resource reloads, preview recursion protection, and a narrow terrain GPU-query hook used by graph editor regeneration. | `editor/graph/voxel_graph_editor.h`, `editor/graph/voxel_graph_editor.cpp`, `editor/graph/voxel_graph_editor_node.h`, `editor/graph/voxel_graph_editor_node.cpp`, `editor/graph/voxel_graph_editor_plugin.h`, `editor/graph/voxel_graph_editor_plugin.cpp`, `editor/graph/voxel_graph_node_inspector_wrapper.cpp`, `util/godot/classes/resource_loader.h`, `util/godot/classes/resource_loader.cpp`, `terrain/voxel_node.h`, `terrain/voxel_node.cpp`, `terrain/fixed_lod/voxel_terrain.h`, `terrain/fixed_lod/voxel_terrain.cpp`, `terrain/variable_lod/voxel_lod_terrain.h`, `terrain/variable_lod/voxel_lod_terrain.cpp` |
+| `SGN: generate shaders from script graph nodes` | Adds GPU shader generation for SGN: `VoxelGraphScriptNode` owns external GLSL loading, compatibility validation, per-node namespacing, SGN parameter constant substitution, and source/function-name production; the graph shader generator registers returned library code and emits SGN calls; shader-library deduplication uses string content. | `generators/graph/voxel_graph_script_node.h`, `generators/graph/voxel_graph_script_node.cpp`, `generators/graph/voxel_graph_shader_generator.cpp`, `generators/graph/code_gen_helper.h`, `generators/graph/code_gen_helper.cpp` |
+| `SGN: refresh editor nodes and script reloads` | Adds editor workflow support: dynamic layout rebuilds, subtitle refresh, inspector script/path/parameter properties, explicit reload hooks for GDScript and GLSL, cache-replacing resource reloads, preview recursion protection, and generator-owned regeneration preparation before terrain restart. | `editor/graph/voxel_graph_editor.h`, `editor/graph/voxel_graph_editor.cpp`, `editor/graph/voxel_graph_editor_node.h`, `editor/graph/voxel_graph_editor_node.cpp`, `editor/graph/voxel_graph_editor_plugin.h`, `editor/graph/voxel_graph_editor_plugin.cpp`, `editor/graph/voxel_graph_node_inspector_wrapper.cpp`, `util/godot/classes/resource_loader.h`, `util/godot/classes/resource_loader.cpp`, `generators/voxel_generator.h`, `generators/voxel_generator.cpp`, `generators/graph/voxel_generator_graph.h`, `generators/graph/voxel_generator_graph.cpp`, `terrain/fixed_lod/voxel_terrain.h`, `terrain/fixed_lod/voxel_terrain.cpp`, `terrain/variable_lod/voxel_lod_terrain.h`, `terrain/variable_lod/voxel_lod_terrain.cpp` |
 | `SGN: document and test script graph nodes` | Adds generated/user-facing graph node docs, SGN fixtures, SGN tests, test runner registration, and this audit. | `doc/graph_nodes.xml`, `doc/source/graph_nodes.md`, `editor/graph/graph_nodes_doc_data.h`, `project/tests/sgn_test_node.gd`, `project/tests/sgn_test_node.glsl`, `tests/tests.cpp`, `tests/voxel/test_voxel_graph.h`, `tests/voxel/test_voxel_graph.cpp`, `sgn_remake_audit.md` |
 
 The effective patch changes these areas:
@@ -26,7 +26,7 @@ The effective patch changes these areas:
 | Node category | `generators/graph/node_type_db.h`, `generators/graph/nodes/misc.h` | Adds a `Misc` category and places `ScriptGraphNode` there instead of `Generate`. | Yes, requested UX/classification change |
 | Dynamic graph behavior | `generators/graph/voxel_graph_function.h`, `generators/graph/voxel_graph_function.cpp`, `generators/graph/program_graph.cpp` | Adds `NODE_SCRIPT_GRAPH`, dynamic port setup, explicit script node refresh, connection preservation by port name, graph duplication support, serialization/deserialization of dynamic outputs, saved-port-name recovery, output-name lookup for SGN dynamic ports, graph hash invalidation by SGN revision, and safe connection checks while dynamic ports are being remapped. | Yes |
 | Runtime compile/execution | `generators/graph/voxel_graph_compiler.cpp`, `generators/graph/voxel_graph_runtime.cpp` | Encodes SGN input/output counts in compiled operations because SGN ports are dynamic and cannot use static `NodeType` counts. Runtime, range analysis, and debug printing read those counts. | Yes |
-| GPU shader generation | `generators/graph/voxel_graph_shader_generator.cpp`, `generators/graph/code_gen_helper.h`, `generators/graph/code_gen_helper.cpp` | Reads SGN GLSL files, validates GPU compatibility, namespaces uniforms/functions per graph node, replaces SGN uniforms with parameter constants, emits SGN calls, and stores required shader library keys by string content instead of raw pointer address. | Yes for GPU SGN |
+| GPU shader generation | `generators/graph/voxel_graph_script_node.h`, `generators/graph/voxel_graph_script_node.cpp`, `generators/graph/voxel_graph_shader_generator.cpp`, `generators/graph/code_gen_helper.h`, `generators/graph/code_gen_helper.cpp` | `VoxelGraphScriptNode` reads SGN GLSL files, validates GPU compatibility, namespaces uniforms/functions per graph node, replaces SGN uniforms with parameter constants, and returns the shader function/source needed by the graph shader generator. The graph shader generator emits SGN calls and stores required shader library keys by string content instead of raw pointer address. | Yes for GPU SGN |
 | Graph editor | `editor/graph/voxel_graph_editor.h`, `editor/graph/voxel_graph_editor.cpp` | Rebuilds SGN node layout when ports change, preserves GUI connections to and from dynamic ports, and guards preview updates from recursively reacting to graph changes. | Yes for editor workflow |
 | Graph editor node UI | `editor/graph/voxel_graph_editor_node.h`, `editor/graph/voxel_graph_editor_node.cpp` | Shows the SGN script basename as a subtitle under the graph node title and refreshes it when the node changes. | Optional UX, low risk |
 | Inspector wrapper | `editor/graph/voxel_graph_node_inspector_wrapper.cpp` | Exposes SGN script assignment, GLSL path, validation messages, exported parameters, and dynamic input defaults through the existing inspector wrapper and undo/redo flow. | Yes for editor workflow |
@@ -56,7 +56,7 @@ SGN follows the existing graph architecture where practical:
 - The graph node stores its editable state in a hidden `NodeType::Param`, like `Function` nodes store a hidden `VoxelGraphFunction` resource. SGN uses a hidden `VoxelGraphScriptNode` resource because the contract is user-authored and dynamic.
 - CPU execution uses the standard `compile_func` plus `process_buffer_func` path. The lambda converts graph buffers into dictionaries keyed by SGN port names, calls the configured GDScript entry point, then writes named outputs back to graph buffers.
 - Range analysis is implemented in the same slot as other nodes. Returning infinite intervals is conservative and appropriate because arbitrary user GDScript cannot be range-analyzed safely.
-- Shader generation plugs into the existing shader generator. SGN is special only where required: it reads an external GLSL backing file, namespaces global identifiers per node instance, replaces uniforms with current parameter constants, and emits a typed call using dynamic port names.
+- Shader generation plugs into the existing shader generator. SGN-specific GLSL loading, namespacing, uniform replacement, and entry-point validation live on `VoxelGraphScriptNode`; the upper shader generator only registers returned source and emits a typed call using dynamic port names.
 - Editor properties use the existing `VoxelGraphNodeInspectorWrapper` pattern: `_get_property_list`, `_set`, `_get`, and `EditorUndoRedoManager` actions. Script assignment and parameter edits refresh dynamic graph ports and node layout, mirroring how expression/function node edits update graph structure.
 - Serialization extends the existing dynamic input mechanism by adding dynamic output names. This is required because SGN output ports can be renamed/reordered by script changes, and saved numeric connections need a name-based recovery path.
 - `ProgramGraph::can_connect` now rejects invalid port locations before checking duplicate/cycle state. SGN refresh can briefly reason about saved locations from an older port contract, so this guard is necessary to preserve same-named connections without invalid port access.
@@ -65,7 +65,7 @@ SGN necessarily has a few special cases:
 
 - Compiled runtime operations include SGN input/output counts after the op id. Existing nodes can derive port counts from static `NodeType` definitions; SGN cannot.
 - `VoxelGraphFunction` refreshes SGN ports by inspecting the SGN resource. This is analogous to function-node refresh, but uses SGN metadata instead of another graph's input/output definitions.
-- Shader source inclusion requires `CodeGenHelper` to deduplicate by string content. SGN passes dynamic include names, so the previous raw `const char *` key storage was not safe for this use.
+- Shader source inclusion requires `CodeGenHelper` to deduplicate by string content. SGN passes generated include names and source strings, so the previous raw `const char *` key storage was not safe for this use.
 
 These special cases are localized to dynamic graph plumbing and are justified by SGN's user-scripted port contract. They do not require changing terrain, streaming, meshing, or GPU task scheduling.
 
@@ -80,7 +80,7 @@ Required for a useful SGN PR:
 - Runtime compiler/runtime count handling for dynamic SGN ports.
 - Safe `ProgramGraph` connection checks for dynamic SGN port remapping.
 - CPU SGN execution.
-- GPU SGN shader source generation and GLSL validation.
+- GPU SGN shader source generation and GLSL validation, owned by `VoxelGraphScriptNode`.
 - Inspector script/path/parameter editing with undo/redo.
 - Explicit reload hooks for GDScript/GLSL backing files.
 - Test fixtures and scheduled SGN tests.
@@ -111,6 +111,7 @@ Current SGN tests include:
 - `test_voxel_graph_sgn_shader_compilation`
 - `test_voxel_graph_script_node_contract`
 - `test_voxel_graph_script_node_cpu_execution`
+- `test_voxel_graph_script_node_debug_compile_does_not_emit_changed`
 - `test_voxel_graph_script_node_port_refresh`
 - `test_voxel_graph_script_node_copy_keeps_connections_after_reload`
 
@@ -133,7 +134,13 @@ After trimming the patchset, the editor build succeeded with:
 scons platform=windows target=editor voxel_tests=yes
 ```
 
-The SGN-focused tests were run directly through `VoxelEngine.run_tests` and passed:
+The full project test scene was run with:
+
+```text
+bin\godot.windows.editor.dev.x86_64.console.exe --path modules\voxel\project res://tests/runner.tscn
+```
+
+The runner reached the expected `------------ Voxel tests end -------------` marker. The run included:
 
 - `test_voxel_graph_sgn_load_script_contract`
 - `test_voxel_graph_sgn_clear_script_reverts_ports`
@@ -141,16 +148,15 @@ The SGN-focused tests were run directly through `VoxelEngine.run_tests` and pass
 - `test_voxel_graph_sgn_shader_compilation`
 - `test_voxel_graph_script_node_contract`
 - `test_voxel_graph_script_node_cpu_execution`
+- `test_voxel_graph_script_node_debug_compile_does_not_emit_changed`
 - `test_voxel_graph_script_node_port_refresh`
 - `test_voxel_graph_script_node_copy_keeps_connections_after_reload`
+- `test_voxel_graph_editor_create_dynamic_layout_node`
 
-The full `--run_voxel_tests` run using `godot.windows.editor.x86_64.console.exe` still fails earlier in `test_block_serializer_stream_peer`, before reaching SGN tests; that failure is outside SGN.
+Final review cleanup verification:
 
-Final review cleanup verification on 2026-05-14:
-
-- `scons platform=windows target=editor voxel_tests=yes` passed.
-- `bin/godot.windows.editor.dev.x86_64.console.exe --run_voxel_tests` did not produce output or exit within 20 minutes in this shell session and was stopped.
-- `bin/godot.windows.editor.x86_64.console.exe --run_voxel_tests` reproduced the known early failure in `test_block_serializer_stream_peer` before the SGN tests run.
+- `scons platform=windows target=editor voxel_tests=yes dev_build=yes debug_symbols=yes` passed.
+- `bin\godot.windows.editor.dev.x86_64.console.exe --path modules\voxel\project res://tests/runner.tscn` reached the expected test-end marker. The command does not exit by itself, so the verification wrapper stopped the process after observing the marker.
 
 ## Review Checklist
 

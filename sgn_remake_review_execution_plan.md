@@ -576,7 +576,7 @@ Completion notes:
 
 ## Task 10: Update Review And Audit Documentation After Code Cleanup
 
-Status: [ ]
+Status: [x]
 
 Priority: final pass.
 
@@ -609,8 +609,8 @@ Verification:
 
 Completion notes:
 
-- Completed:
-- Verified:
+- Completed: synchronized `sgn_remake_audit.md` with the current effective diff, including SGN-owned GLSL shader source handling, the current regeneration file list, the retained debug-compile SGN test, and the current build/test verification flow. Replaced the stale initial `sgn_remake_review.md` findings with a current final architecture review that records fixed blockers, remaining localized SGN special cases, and follow-up candidates.
+- Verified: ran `git diff --name-status master...HEAD` and compared it against the audit file lists. Ran `rg -n "VoxelGeneratorGraph|DirectStaticBody|VoxelEngine::~VoxelEngine|subtitle|NODE_SCRIPT_GRAPH|voxel_node|do not submit|still present|not as tightly scoped|GraphNode children|shader_generator.cpp:87|full --run_voxel_tests|test_block_serializer_stream_peer" sgn_remake_audit.md sgn_remake_review.md sgn_remake_review_execution_plan.md`; remaining hits are either current architecture references or historical task descriptions in the execution plan, not stale audit/review claims.
 
 ## Suggested Agent Batches
 
