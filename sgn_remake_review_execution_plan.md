@@ -530,7 +530,7 @@ Completion notes:
 
 ## Task 9: Trim Tests To A Focused Acceptance Suite
 
-Status: [ ]
+Status: [x]
 
 Priority: medium.
 
@@ -571,8 +571,8 @@ Verification:
 
 Completion notes:
 
-- Completed:
-- Verified:
+- Completed: evaluated the SGN test additions for coverage pertinence instead of trimming them. Retained all current SGN tests because each protects a review-relevant behavior: `test_voxel_graph_sgn_load_script_contract` covers script assignment, contract extraction, graph dynamic layout names, and shader path loading; `test_voxel_graph_sgn_clear_script_reverts_ports` covers clearing script state and graph port reset; `test_voxel_graph_sgn_shader_path_property` covers the editor-visible shader path property needed for GPU SGN authoring; `test_voxel_graph_sgn_shader_compilation` covers shader source generation, namespacing, uniform constant replacement, and call emission; `test_voxel_graph_script_node_contract` is partially overlapping but directly covers the resource API and parameter value path, so it remains useful while SGN resource behavior is the largest review surface; `test_voxel_graph_script_node_cpu_execution` covers runtime VM execution; `test_voxel_graph_script_node_debug_compile_does_not_emit_changed` covers the preview/debug compile changed-signal regression that motivated earlier cleanup; `test_voxel_graph_script_node_port_refresh` covers same-named input/output preservation after dynamic layout refresh; `test_voxel_graph_script_node_copy_keeps_connections_after_reload` covers serialization/remap/copy preservation.
+- Verified: ran `git diff --numstat master...HEAD -- tests/voxel/test_voxel_graph.cpp tests/voxel/test_voxel_graph.h tests/tests.cpp project/tests/sgn_test_node.gd project/tests/sgn_test_node.glsl` and `rg -n "test_voxel_graph_sgn_|test_voxel_graph_script_node_" tests/voxel/test_voxel_graph.cpp tests/voxel/test_voxel_graph.h tests/tests.cpp` to review the current SGN test footprint and registration. No test code was changed after the evaluation.
 
 ## Task 10: Update Review And Audit Documentation After Code Cleanup
 
@@ -634,6 +634,6 @@ Agents should pick one of these batches, not the whole plan.
 - [x] Output hash SGN revision handling is minimal or deferred.
 - [x] Dynamic output serialization is minimal and clearly justified.
 - [x] Shader generation SGN special-casing is reduced, localized, or documented as the remaining exception.
-- [ ] SGN resource and test diffs have been reviewed for MVP scope.
+- [x] SGN resource and test diffs have been reviewed for MVP scope.
 - [x] SGN tests pass.
 - [x] Build passes.
