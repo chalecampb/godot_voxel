@@ -4,6 +4,7 @@
 #include "../../engine/gpu/compute_shader_resource.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/classes/resource.h"
+#include "../../util/godot/core/packed_arrays.h"
 #include "../../util/string/std_string.h"
 #include "../../util/thread/mutex.h"
 #include "program_graph.h"
@@ -98,6 +99,7 @@ public:
 		NODE_RELAY,
 		NODE_SPOTS_2D,
 		NODE_SPOTS_3D,
+		NODE_SCRIPT_GRAPH,
 
 	// Optional features down (to avoid diffs in docs when building both versions)
 	// Keep in mind this enum's values should not be used in persistent context (saves)
@@ -273,6 +275,8 @@ public:
 	bool get_node_param_index_by_name(uint32_t node_id, String param_name, unsigned int &out_param_index) const;
 
 	void update_function_nodes(StdVector<ProgramGraph::Connection> *removed_connections);
+	bool update_node_layout(uint32_t node_id, StdVector<ProgramGraph::Connection> *removed_connections);
+	void refresh_node_layout(uint32_t node_id);
 
 	// Copies nodes into another graph, and connections between them only.
 	// Resources in node parameters will be duplicated if they don't have a file path.
