@@ -1657,8 +1657,12 @@ CompilationResult Runtime::compile_preprocessed_graph(
 		const ProgramGraph::Node &node = graph.get_node(node_id);
 		const NodeType &type = type_db.get_type(node.type_id);
 
-		ZN_ASSERT(node.inputs.size() == type.inputs.size());
-		ZN_ASSERT(node.outputs.size() == type.outputs.size());
+		if (!type.uses_dynamic_runtime_ports) {
+			ZN_ASSERT(node.inputs.size() == type.inputs.size());
+			ZN_ASSERT(node.outputs.size() == type.outputs.size());
+		}
+		const uint32_t inputs_count = type.uses_dynamic_runtime_ports ? node.inputs.size() : type.inputs.size();
+		const uint32_t outputs_count = type.uses_dynamic_runtime_ports ? node.outputs.size() : type.outputs.size();
 
 		if (order_index == inner_group_start_index) {
 			program.inner_group_start_op_index = operations.size();
@@ -1741,20 +1745,27 @@ CompilationResult Runtime::compile_preprocessed_graph(
 		}
 
 		operations.push_back(node.type_id);
+		if (type.uses_dynamic_runtime_ports) {
+			ZN_ASSERT_RETURN_V(inputs_count <= std::numeric_limits<uint16_t>::max(), CompilationResult());
+			ZN_ASSERT_RETURN_V(outputs_count <= std::numeric_limits<uint16_t>::max(), CompilationResult());
+			operations.push_back(static_cast<uint16_t>(inputs_count));
+			operations.push_back(static_cast<uint16_t>(outputs_count));
+		}
 
 		// Inputs and outputs use a convention so we can have generic code for them.
 		// Parameters are more specific, and may be affected by alignment so better just do them by hand
 
 		// Add inputs
-		for (size_t j = 0; j < type.inputs.size(); ++j) {
-			const NodeType::Port &port = type.inputs[j];
+		for (size_t j = 0; j < inputs_count; ++j) {
 			uint16_t a;
 
 			if (node.inputs[j].connections.size() == 0) {
 				// No input, default it
 				ZN_ASSERT(j < node.default_inputs.size());
 				float defval = node.default_inputs[j];
-				a = mem.add_constant(defval, port.require_input_buffer_when_constant);
+				const bool require_input_buffer_when_constant =
+						type.uses_dynamic_runtime_ports ? true : type.inputs[j].require_input_buffer_when_constant;
+				a = mem.add_constant(defval, require_input_buffer_when_constant);
 
 			} else {
 				const ProgramGraph::PortLocation src_port = node.inputs[j].connections[0];
@@ -1781,7 +1792,7 @@ CompilationResult Runtime::compile_preprocessed_graph(
 		}
 
 		// Add outputs
-		for (size_t j = 0; j < type.outputs.size(); ++j) {
+		for (size_t j = 0; j < outputs_count; ++j) {
 			// Note, outputs of output nodes could be pinned, however since they are given a fake user, their lifespan
 			// is undeterminate and will never be re-used by memory allocation. This is better than pinning, because the
 			// buffer can be re-used several times before stopping at the output, while pinned buffers are always unique
@@ -1985,13 +1996,14 @@ CompilationResult Runtime::compile_preprocessed_graph(
 				const uint32_t node_id = order[order_index];
 				const ProgramGraph::Node &node = graph.get_node(node_id);
 				const NodeType &type = type_db.get_type(node.type_id);
+				const uint32_t outputs_count = type.uses_dynamic_runtime_ports ? node.outputs.size() : type.outputs.size();
 
 				uint16_t throwaway_data_index = 0;
 				bool has_throwaway_data = false;
 
 				// Allocate data to store outputs.
 				// Note, we don't allocate for inputs. The only way to allocate them is to pin them.
-				for (unsigned int output_index = 0; output_index < type.outputs.size(); ++output_index) {
+				for (unsigned int output_index = 0; output_index < outputs_count; ++output_index) {
 					const ProgramGraph::PortLocation dst_port{ node_id, output_index };
 					auto address_it = program.output_port_addresses.find(dst_port);
 					ZN_ASSERT(address_it != program.output_port_addresses.end());

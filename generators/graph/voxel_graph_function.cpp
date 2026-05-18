@@ -7,6 +7,7 @@
 #include "../../util/profiling.h"
 #include "../../util/string/format.h"
 #include "node_type_db.h"
+#include "voxel_graph_script_node.h"
 
 #ifdef ZN_GODOT
 #include "../../util/godot/core/callable_mp.h"
@@ -215,6 +216,27 @@ void setup_function(ProgramGraph::Node &node, Ref<VoxelGraphFunction> func) {
 	// TODO Function parameters
 }
 
+bool VoxelGraphFunction::update_node_layout(
+		uint32_t node_id,
+		StdVector<ProgramGraph::Connection> *removed_connections
+) {
+	ProgramGraph::Node *node = _graph.try_get_node(node_id);
+	ERR_FAIL_COND_V(node == nullptr, false);
+	const NodeType &node_type = NodeTypeDB::get_singleton().get_type(node->type_id);
+	if (node_type.update_node_layout_func == nullptr) {
+		return false;
+	}
+
+	node_type.update_node_layout_func(_graph, node_id, removed_connections);
+	return true;
+}
+
+void VoxelGraphFunction::refresh_node_layout(uint32_t node_id) {
+	if (update_node_layout(node_id, nullptr)) {
+		emit_changed();
+	}
+}
+
 void update_function(ProgramGraph &graph, uint32_t node_id, StdVector<ProgramGraph::Connection> *removed_connections) {
 	ProgramGraph::Node &node = graph.get_node(node_id);
 	ZN_ASSERT(node.type_id == VoxelGraphFunction::NODE_FUNCTION);
@@ -304,6 +326,12 @@ ProgramGraph::Node *duplicate_node(
 	}
 
 	dst_node->outputs.resize(src_node.outputs.size());
+	for (unsigned int i = 0; i < src_node.outputs.size(); ++i) {
+		const ProgramGraph::Port &src_output = src_node.outputs[i];
+		ProgramGraph::Port &dst_output = dst_node->outputs[i];
+		dst_output.dynamic_name = src_output.dynamic_name;
+		dst_output.autoconnect_hint = src_output.autoconnect_hint;
+	}
 
 	dst_node->default_inputs = src_node.default_inputs;
 	dst_node->params = src_node.params;
@@ -576,6 +604,11 @@ void VoxelGraphFunction::set_node_param_unchecked(
 		if (resource.is_valid()) {
 			register_subresource(**resource);
 		}
+
+		const NodeType &node_type = NodeTypeDB::get_singleton().get_type(node.type_id);
+		if (node_type.update_node_layout_func != nullptr) {
+			update_node_layout(node.id, nullptr);
+		}
 	}
 
 	emit_changed();
@@ -700,6 +733,16 @@ static bool try_get_output_index_from_name(
 		Span<const VoxelGraphFunction::Port> output_defs = function->get_output_definitions();
 		for (unsigned int i = 0; i < output_defs.size(); ++i) {
 			if (output_defs[i].name == name) {
+				out_index = i;
+				return true;
+			}
+		}
+	}
+
+	for (uint32_t i = 0; i < node.outputs.size(); ++i) {
+		const ProgramGraph::Port &output = node.outputs[i];
+		if (!output.dynamic_name.empty()) {
+			if (name == output.dynamic_name.c_str()) {
 				out_index = i;
 				return true;
 			}
@@ -887,6 +930,12 @@ uint64_t VoxelGraphFunction::get_output_graph_hash() const {
 					// Note, the obtained hash can change here even if the result is identical, because it's hard to
 					// tell which properties contribute to the result. This should be rare though.
 					hash = hash_djb2_one_64(godot::get_deep_hash(*obj), hash);
+				}
+				if (node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+					Ref<VoxelGraphScriptNode> script_node = v;
+					if (script_node.is_valid()) {
+						hash = hash_djb2_one_64(script_node->get_revision(), hash);
+					}
 				}
 			} else {
 				hash = hash_djb2_one_64(v.hash(), hash);
@@ -1085,6 +1134,20 @@ Dictionary get_graph_as_variant_data(const ProgramGraph &graph) {
 			node_data["dynamic_inputs"] = dynamic_inputs_data;
 		}
 
+		// Dynamic outputs. Order matters, it lets saved numeric connections be remapped by port name if a dynamic
+		// port contract changes before the graph is loaded again.
+		Array dynamic_outputs_data;
+		for (size_t j = 0; j < node->outputs.size(); ++j) {
+			const ProgramGraph::Port &port = node->outputs[j];
+			if (port.is_dynamic()) {
+				dynamic_outputs_data.append(String(port.dynamic_name.c_str()));
+			}
+		}
+
+		if (dynamic_outputs_data.size() > 0) {
+			node_data["dynamic_outputs"] = dynamic_outputs_data;
+		}
+
 		String key = String::num_uint64(node_id);
 		nodes_data[key] = node_data;
 	});
@@ -1125,6 +1188,100 @@ bool var_to_id(Variant v, uint32_t &out_id, uint32_t min = 0) {
 	ERR_FAIL_COND_V(i < 0 || (unsigned int)i < min, false);
 	out_id = i;
 	return true;
+}
+
+bool try_get_saved_dynamic_port_name(const Dictionary &node_data, uint32_t port_index, bool output, String &out_name) {
+	const String key = output ? "dynamic_outputs" : "dynamic_inputs";
+	if (!node_data.has(key)) {
+		return false;
+	}
+
+	const Array ports_data = node_data[key];
+	if (port_index >= static_cast<uint32_t>(ports_data.size())) {
+		out_name = String();
+		return true;
+	}
+
+	if (output) {
+		out_name = ports_data[port_index];
+		return true;
+	}
+
+	const Array d = ports_data[port_index];
+	if (d.size() < 1) {
+		out_name = String();
+		return true;
+	}
+	out_name = d[0];
+	return true;
+}
+
+void recover_script_graph_port_names_from_graph_data(Ref<VoxelGraphScriptNode> script_node, const Dictionary &node_data) {
+	ERR_FAIL_COND(script_node.is_null());
+
+	const Span<const Ref<VoxelGraphScriptNodePort>> input_ports = script_node->get_input_ports();
+	for (uint32_t i = 0; i < input_ports.size(); ++i) {
+		const Ref<VoxelGraphScriptNodePort> &port = input_ports[i];
+		String saved_name;
+		if (port.is_valid() && port->get_port_name().is_empty() &&
+				try_get_saved_dynamic_port_name(node_data, i, false, saved_name) && !saved_name.is_empty()) {
+			port->set_port_name(saved_name);
+		}
+	}
+
+	const Span<const Ref<VoxelGraphScriptNodePort>> output_ports = script_node->get_output_ports();
+	for (uint32_t i = 0; i < output_ports.size(); ++i) {
+		const Ref<VoxelGraphScriptNodePort> &port = output_ports[i];
+		String saved_name;
+		if (port.is_valid() && port->get_port_name().is_empty() &&
+				try_get_saved_dynamic_port_name(node_data, i, true, saved_name) && !saved_name.is_empty()) {
+			port->set_port_name(saved_name);
+		}
+	}
+}
+
+bool try_get_saved_dynamic_port_name(
+		const Dictionary &nodes_data,
+		ProgramGraph::PortLocation loc,
+		bool output,
+		String &out_name
+) {
+	const String node_key = String::num_uint64(loc.node_id);
+	if (!nodes_data.has(node_key)) {
+		return false;
+	}
+	const Dictionary node_data = nodes_data[node_key];
+	return try_get_saved_dynamic_port_name(node_data, loc.port_index, output, out_name);
+}
+
+bool remap_dynamic_port_by_saved_name(
+		const ProgramGraph &graph,
+		ProgramGraph::PortLocation &loc,
+		bool output,
+		const Dictionary &nodes_data
+) {
+	String saved_name;
+	if (!try_get_saved_dynamic_port_name(nodes_data, loc, output, saved_name)) {
+		return true;
+	}
+	if (saved_name.is_empty()) {
+		return false;
+	}
+
+	const ProgramGraph::Node *node = graph.try_get_node(loc.node_id);
+	if (node == nullptr) {
+		return false;
+	}
+	const StdVector<ProgramGraph::Port> &ports = output ? node->outputs : node->inputs;
+	const CharString saved_name_utf8 = saved_name.utf8();
+	for (uint32_t port_index = 0; port_index < ports.size(); ++port_index) {
+		if (ports[port_index].dynamic_name == saved_name_utf8.get_data()) {
+			loc.port_index = port_index;
+			return true;
+		}
+	}
+
+	return false;
 }
 
 bool load_graph_from_variant_data(ProgramGraph &graph, Dictionary data, String resource_path) {
@@ -1186,6 +1343,25 @@ bool load_graph_from_variant_data(ProgramGraph &graph, Dictionary data, String r
 			// TODO Function inputs are user-named, but they could conflict with other keys in this save format
 		}
 
+		Ref<VoxelGraphScriptNode> script_node_resource;
+		if (type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			const NodeType &ntype = type_db.get_type(type_id);
+			ZN_ASSERT(ntype.params.size() >= 1);
+			const String script_node_key = ntype.params[0].name;
+			script_node_resource = node_data[script_node_key];
+			if (script_node_resource.is_null()) {
+				ERR_PRINT(String("Unable to load ScriptGraphNode resource referenced in {0} {}")
+								  .format(varray(VoxelGraphFunction::get_class_static(), resource_path)));
+				return false;
+			}
+			recover_script_graph_port_names_from_graph_data(script_node_resource, node_data);
+			node->params.resize(1);
+			node->params[0] = script_node_resource;
+			const NodeType &node_type = type_db.get_type(node->type_id);
+			ZN_ASSERT(node_type.update_node_layout_func != nullptr);
+			node_type.update_node_layout_func(graph, id, nullptr);
+		}
+
 		Variant auto_connect_v = node_data.get("auto_connect", Variant());
 		if (auto_connect_v != Variant()) {
 			node->autoconnect_default_inputs = auto_connect_v;
@@ -1210,6 +1386,9 @@ bool load_graph_from_variant_data(ProgramGraph &graph, Dictionary data, String r
 				continue;
 			}
 			if (param_name == "dynamic_inputs") {
+				if (type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+					continue;
+				}
 				const Array dynamic_inputs_data = node_data[param_key];
 
 				for (int dpi = 0; dpi < dynamic_inputs_data.size(); ++dpi) {
@@ -1258,9 +1437,24 @@ bool load_graph_from_variant_data(ProgramGraph &graph, Dictionary data, String r
 		ERR_FAIL_COND_V(!var_to_id(con_data[1], src.port_index), false);
 		ERR_FAIL_COND_V(!var_to_id(con_data[2], dst.node_id, ProgramGraph::NULL_ID), false);
 		ERR_FAIL_COND_V(!var_to_id(con_data[3], dst.port_index), false);
+		if (!remap_dynamic_port_by_saved_name(graph, src, true, nodes_data) ||
+				!remap_dynamic_port_by_saved_name(graph, dst, false, nodes_data)) {
+			ERR_PRINT(
+					String("Dropping invalid graph connection from node {0} port {1} to node {2} port {3}.")
+							.format(varray(src.node_id, src.port_index, dst.node_id, dst.port_index))
+			);
+			continue;
+		}
 		// TODO Create temporary invalid connections if the node has different inputs than before (to handle the case
 		// where an external function has changed)
-		graph.connect(src, dst);
+		if (graph.can_connect(src, dst)) {
+			graph.connect(src, dst);
+		} else {
+			ERR_PRINT(
+					String("Dropping invalid graph connection from node {0} port {1} to node {2} port {3}.")
+							.format(varray(src.node_id, src.port_index, dst.node_id, dst.port_index))
+			);
+		}
 	}
 
 	return true;
@@ -1311,14 +1505,12 @@ void VoxelGraphFunction::get_node_input_info(
 				*out_name = "<error>";
 			}
 
+		} else if (port.dynamic_name.empty()) {
+			const NodeType &type = NodeTypeDB::get_singleton().get_type(node.type_id);
+			ZN_ASSERT(input_index < type.inputs.size());
+			*out_name = type.inputs[input_index].name;
 		} else {
-			if (port.dynamic_name.empty()) {
-				const NodeType &type = NodeTypeDB::get_singleton().get_type(node.type_id);
-				ZN_ASSERT(input_index < type.inputs.size());
-				*out_name = type.inputs[input_index].name;
-			} else {
-				*out_name = godot::to_godot(port.dynamic_name);
-			}
+			*out_name = godot::to_godot(port.dynamic_name);
 		}
 	}
 
@@ -1348,14 +1540,12 @@ String VoxelGraphFunction::get_node_output_name(uint32_t node_id, unsigned int o
 			return "<error>";
 		}
 
+	} else if (port.dynamic_name.empty()) {
+		const NodeType &type = NodeTypeDB::get_singleton().get_type(node.type_id);
+		ZN_ASSERT(output_index < type.outputs.size());
+		return type.outputs[output_index].name;
 	} else {
-		if (port.dynamic_name.empty()) {
-			const NodeType &type = NodeTypeDB::get_singleton().get_type(node.type_id);
-			ZN_ASSERT(output_index < type.outputs.size());
-			return type.outputs[output_index].name;
-		} else {
-			return godot::to_godot(port.dynamic_name);
-		}
+		return godot::to_godot(port.dynamic_name);
 	}
 }
 
@@ -1512,7 +1702,11 @@ bool VoxelGraphFunction::get_node_input_index_by_name(
 		String input_name,
 		unsigned int &out_input_index
 ) const {
-	const ProgramGraph::Node &node = _graph.get_node(node_id);
+	const ProgramGraph::Node *node_ptr = _graph.try_get_node(node_id);
+	if (node_ptr == nullptr) {
+		return false;
+	}
+	const ProgramGraph::Node &node = *node_ptr;
 
 	if (node.type_id == VoxelGraphFunction::NODE_FUNCTION) {
 		ZN_ASSERT(node.params.size() >= 1);
@@ -1542,9 +1736,12 @@ bool VoxelGraphFunction::get_node_param_index_by_name(
 		String param_name,
 		unsigned int &out_param_index
 ) const {
-	const ProgramGraph::Node &node = _graph.get_node(node_id);
+	const ProgramGraph::Node *node = _graph.try_get_node(node_id);
+	if (node == nullptr) {
+		return false;
+	}
 	const NodeTypeDB &type_db = NodeTypeDB::get_singleton();
-	return type_db.try_get_param_index_from_name(node.type_id, param_name, out_param_index);
+	return type_db.try_get_param_index_from_name(node->type_id, param_name, out_param_index);
 }
 
 void VoxelGraphFunction::update_function_nodes(StdVector<ProgramGraph::Connection> *removed_connections) {
@@ -1862,9 +2059,8 @@ void VoxelGraphFunction::duplicate_subgraph(
 	for (const uint32_t node_id : original_node_ids) {
 		const ProgramGraph::Node *original_src_node = _graph.try_get_node(node_id);
 
-		for (const ProgramGraph::Port &port : original_src_node->inputs) {
-			unsigned int dst_port_index = 0;
-
+		for (unsigned int dst_port_index = 0; dst_port_index < original_src_node->inputs.size(); ++dst_port_index) {
+			const ProgramGraph::Port &port = original_src_node->inputs[dst_port_index];
 			for (const ProgramGraph::PortLocation loc : port.connections) {
 				size_t copied_src_node_index;
 
@@ -1875,8 +2071,6 @@ void VoxelGraphFunction::duplicate_subgraph(
 
 					dst_graph.add_connection(copied_src_node_id, loc.port_index, copied_dst_node_id, dst_port_index);
 				}
-
-				++dst_port_index;
 			}
 		}
 
@@ -2070,6 +2264,7 @@ void VoxelGraphFunction::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_node_name", "node_id"), &Self::get_node_name);
 	ClassDB::bind_method(D_METHOD("set_node_name", "node_id", "name"), &Self::set_node_name);
 	ClassDB::bind_method(D_METHOD("set_expression_node_inputs", "node_id", "names"), &Self::set_expression_node_inputs);
+	ClassDB::bind_method(D_METHOD("refresh_node_layout", "node_id"), &Self::refresh_node_layout);
 
 	ClassDB::bind_method(D_METHOD("get_node_type_count"), &Self::_b_get_node_type_count);
 	ClassDB::bind_method(D_METHOD("get_node_type_info", "type_id"), &Self::_b_get_node_type_info);
@@ -2164,6 +2359,7 @@ void VoxelGraphFunction::_bind_methods() {
 	BIND_ENUM_CONSTANT(NODE_RELAY);
 	BIND_ENUM_CONSTANT(NODE_SPOTS_2D);
 	BIND_ENUM_CONSTANT(NODE_SPOTS_3D);
+	BIND_ENUM_CONSTANT(NODE_SCRIPT_GRAPH);
 	BIND_ENUM_CONSTANT(NODE_TYPE_COUNT);
 #ifdef VOXEL_ENABLE_FAST_NOISE_2
 	BIND_ENUM_CONSTANT(NODE_FAST_NOISE_2_2D);
