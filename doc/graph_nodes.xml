@@ -449,6 +449,11 @@
 			If [code]t[/code] is lower than [code]threshold[/code], returns [code]a[/code]. Otherwise, returns [code]b[/code]. 
 		</description>
 	</node>
+	<node name="ScriptGraphNode" category="Functions">
+		<description>
+			Runs a custom [VoxelGraphScriptNode] resource backed by a script contract. Inputs, outputs, and parameters are defined by the assigned script.
+		</description>
+	</node>
 	<node name="Sin" category="Math">
 		<input name="x" default_value="0"/>
 		<output name="out"/>
