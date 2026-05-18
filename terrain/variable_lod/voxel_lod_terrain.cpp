@@ -23,6 +23,7 @@
 #include "../../util/godot/classes/shader.h"
 #include "../../util/godot/classes/viewport.h"
 #include "../../util/godot/core/array.h"
+#include "../../util/godot/core/callable_mp.h"
 #include "../../util/godot/core/string.h"
 #include "../../util/math/color.h"
 #include "../../util/math/conv.h"
@@ -332,10 +333,25 @@ void VoxelLodTerrain::set_generator(Ref<VoxelGenerator> p_generator) {
 		return;
 	}
 
+	Ref<VoxelGenerator> prev_generator = get_generator();
+	if (prev_generator.is_valid()) {
+		const Callable callable = callable_mp(this, &VoxelLodTerrain::_on_generator_regeneration_requested);
+		if (prev_generator->is_connected(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable)) {
+			prev_generator->disconnect(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable);
+		}
+	}
+
 	_data->set_generator(p_generator);
 
 	MeshingDependency::reset(_meshing_dependency, _mesher, p_generator);
 	StreamingDependency::reset(_streaming_dependency, get_stream(), p_generator);
+
+	if (p_generator.is_valid()) {
+		const Callable callable = callable_mp(this, &VoxelLodTerrain::_on_generator_regeneration_requested);
+		if (!p_generator->is_connected(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable)) {
+			p_generator->connect(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable);
+		}
+	}
 
 #ifdef TOOLS_ENABLED
 	if (p_generator.is_valid()) {
@@ -356,6 +372,10 @@ void VoxelLodTerrain::set_generator(Ref<VoxelGenerator> p_generator) {
 
 Ref<VoxelGenerator> VoxelLodTerrain::get_generator() const {
 	return _data->get_generator();
+}
+
+void VoxelLodTerrain::_on_generator_regeneration_requested() {
+	restart_stream();
 }
 
 void VoxelLodTerrain::_on_gi_mode_changed() {

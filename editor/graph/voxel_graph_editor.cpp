@@ -502,15 +502,20 @@ void VoxelGraphEditor::remove_node_gui(StringName gui_node_name) {
 // 	return nullptr;
 // }
 
-void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
-	ERR_FAIL_COND(_graph.is_null());
+bool VoxelGraphEditor::update_node_layout(uint32_t node_id) {
+	ERR_FAIL_COND_V(_graph.is_null(), false);
 
 	GraphEdit &graph_edit = *_graph_edit;
 	const String view_name = node_to_gui_name(node_id);
+	if (!graph_edit.has_node(view_name)) {
+		return false;
+	}
 	VoxelGraphEditorNode *view = get_node_typed<VoxelGraphEditorNode>(graph_edit, view_name);
-	ERR_FAIL_COND(view == nullptr);
+	if (view == nullptr) {
+		return false;
+	}
 
-	// Remove all GUI connections going to the node
+	// Remove all GUI connections going to or from the node
 
 	StdVector<GraphEditConnection> old_connections;
 	get_graph_edit_connections(graph_edit, old_connections);
@@ -521,17 +526,18 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 		if (to_view == nullptr) {
 			continue;
 		}
-		if (to_view == view) {
+		const NodePath from = to_node_path(con.from);
+		const VoxelGraphEditorNode *from_view = get_node_typed<VoxelGraphEditorNode>(graph_edit, from);
+		if (to_view == view || from_view == view) {
 			graph_edit.disconnect_node(con.from, con.from_port, con.to, con.to_port);
 		}
 	}
 
 	// Update node layout
 
+	view->update_title(**_graph);
 	view->update_layout(**_graph);
-
-	// TODO What about output connections?
-	// Currently assuming there is always only one for expression nodes, therefore it might be ok?
+	view->set_size(view->get_combined_minimum_size());
 
 	// Add connections back by reading the graph
 
@@ -542,7 +548,7 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 	for (size_t i = 0; i < all_connections.size(); ++i) {
 		const ProgramGraph::Connection &con = all_connections[i];
 
-		if (con.dst.node_id == node_id) {
+		if (con.dst.node_id == node_id || con.src.node_id == node_id) {
 			graph_edit.connect_node(
 					node_to_gui_name(con.src.node_id),
 					con.src.port_index,
@@ -551,6 +557,8 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 			);
 		}
 	}
+
+	return true;
 }
 
 void VoxelGraphEditor::update_node_comment(uint32_t node_id) {
@@ -1121,10 +1129,8 @@ void VoxelGraphEditor::update_previews(bool with_live_update) {
 		if (hash != _last_output_graph_hash) {
 			_last_output_graph_hash = hash;
 
-			// Not calling into `_voxel_node` directly because the editor could be pinned and the terrain not actually
-			// selected. In this situation the plugin may reset the node to null. But it is desirable for terrains
-			// using the current graph to update if they are in the edited scene, so this may be delegated to the editor
-			// plugin. There isn't enough context from here to do this cleanly.
+			// The editor may be pinned with no terrain selected. The plugin will ask the generator to request
+			// regeneration; terrains using it decide whether and how to restart.
 			emit_signal(SIGNAL_REGENERATE_REQUESTED);
 		}
 	}
@@ -1250,6 +1256,16 @@ void VoxelGraphEditor::schedule_preview_update() {
 
 void VoxelGraphEditor::_on_graph_changed() {
 	schedule_preview_update();
+	if (_graph.is_valid() && _graph_edit != nullptr) {
+		PackedInt32Array node_ids = _graph->get_node_ids();
+		for (int i = 0; i < node_ids.size(); ++i) {
+			const uint32_t node_id = node_ids[i];
+			const NodeType &node_type = NodeTypeDB::get_singleton().get_type(_graph->get_node_type_id(node_id));
+			if (node_type.update_node_layout_func != nullptr) {
+				update_node_layout(node_id);
+			}
+		}
+	}
 }
 
 void VoxelGraphEditor::_on_graph_node_name_changed(int node_id) {

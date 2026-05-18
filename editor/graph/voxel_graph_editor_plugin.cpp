@@ -11,6 +11,7 @@
 #include "../../util/godot/classes/resource_saver.h"
 #include "../../util/godot/core/string.h"
 #include "../../util/godot/editor_scale.h"
+#include "../../util/io/log.h"
 #include "../../util/string/format.h"
 #include "editor_property_text_change_on_submit.h"
 #include "voxel_graph_editor.h"
@@ -68,6 +69,7 @@ void VoxelGraphEditorPlugin::init() {
 	vgf_inspector_plugin.instantiate();
 	vgf_inspector_plugin->set_listener(this);
 	add_inspector_plugin(vgf_inspector_plugin);
+
 }
 
 bool VoxelGraphEditorPlugin::_zn_handles(const Object *p_object) const {
@@ -262,37 +264,11 @@ void VoxelGraphEditorPlugin::_on_graph_editor_nodes_deleted() {
 	inspect_graph_or_generator(*_graph_editor);
 }
 
-template <typename F>
-void for_each_node(Node *parent, F action) {
-	action(parent);
-	for (int i = 0; i < parent->get_child_count(); ++i) {
-		for_each_node(parent->get_child(i), action);
-	}
-}
-
 void VoxelGraphEditorPlugin::_on_graph_editor_regenerate_requested() {
-	// We could be editing the graph standalone with no terrain loaded
-	VoxelNode *terrain_node = _voxel_node.get();
-	if (terrain_node != nullptr) {
-		// Re-generate the selected terrain.
-		terrain_node->restart_stream();
+	Ref<VoxelGeneratorGraph> generator = _graph_editor->get_generator();
+	ERR_FAIL_COND(generator.is_null());
 
-	} else {
-		// The node is not selected, but it might be in the tree
-		Node *root = get_editor_interface()->get_edited_scene_root();
-
-		if (root != nullptr) {
-			Ref<VoxelGeneratorGraph> generator = _graph_editor->get_generator();
-			ERR_FAIL_COND(generator.is_null());
-
-			for_each_node(root, [&generator](Node *node) {
-				VoxelNode *vnode = Object::cast_to<VoxelNode>(node);
-				if (vnode != nullptr && vnode->get_generator() == generator) {
-					vnode->restart_stream();
-				}
-			});
-		}
-	}
+	generator->request_regeneration();
 }
 
 void VoxelGraphEditorPlugin::_on_graph_editor_popout_requested() {
