@@ -26,17 +26,23 @@ CompilationResult generate_shader(
 class ShaderGenContext {
 public:
 	ShaderGenContext(
+			uint32_t node_id,
 			const StdVector<Variant> &params,
 			Span<const char *> input_names,
 			Span<const char *> output_names,
 			CodeGenHelper &code_gen,
 			StdVector<ShaderParameter> &uniforms
 	) :
+			_node_id(node_id),
 			_params(params),
 			_input_names(input_names),
 			_output_names(output_names),
 			_code_gen(code_gen),
 			_uniforms(uniforms) {}
+
+	uint32_t get_node_id() const {
+		return _node_id;
+	}
 
 	Variant get_param(size_t i) const {
 		ZN_ASSERT(i < _params.size());
@@ -76,6 +82,7 @@ public:
 	StdString add_uniform(std::shared_ptr<ComputeShaderResource> res);
 
 private:
+	uint32_t _node_id;
 	const StdVector<Variant> &_params;
 	Span<const char *> _input_names;
 	Span<const char *> _output_names;

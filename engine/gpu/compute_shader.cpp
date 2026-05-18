@@ -113,17 +113,29 @@ std::shared_ptr<ComputeShader> ComputeShaderFactory::create_from_glsl(String sou
 	std::shared_ptr<ComputeShader> shader = make_shared_instance<ComputeShader>();
 	VoxelEngine::get_singleton().push_gpu_task_f([shader, source_text, name](GPUTaskContext &ctx) {
 		shader->_internal.load_from_glsl(ctx.rendering_device, source_text, name);
+		shader->_compilation_successful.store(shader->_internal.is_valid());
+		shader->_compilation_complete.store(true);
 	});
 	return shader;
 }
 
 std::shared_ptr<ComputeShader> ComputeShaderFactory::create_invalid() {
-	return make_shared_instance<ComputeShader>();
+	std::shared_ptr<ComputeShader> shader = make_shared_instance<ComputeShader>();
+	shader->_compilation_complete.store(true);
+	return shader;
 }
 
 RID ComputeShader::get_rid() const {
 	// TODO Assert that we are on the GPU tasks thread
 	return _internal.rid;
+}
+
+bool ComputeShader::is_compilation_complete() const {
+	return _compilation_complete.load();
+}
+
+bool ComputeShader::is_compilation_successful() const {
+	return _compilation_successful.load();
 }
 
 // std::shared_ptr<ComputeShader> ComputeShader::create_invalid() {
