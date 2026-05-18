@@ -179,6 +179,24 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_voxel_graph_broad_block);
 	VOXEL_TEST(test_voxel_graph_set_default_input_by_name);
 	VOXEL_TEST(test_voxel_graph_get_io_indices);
+	VOXEL_TEST(test_voxel_graph_sgn_load_script_contract);
+	VOXEL_TEST(test_voxel_graph_sgn_clear_script_reverts_ports);
+	VOXEL_TEST(test_voxel_graph_sgn_child_resource_change_invalidates_validation);
+	VOXEL_TEST(test_voxel_graph_sgn_shader_path_property);
+	VOXEL_TEST(test_voxel_graph_sgn_shader_compilation);
+	VOXEL_TEST(test_voxel_graph_sgn_shader_project_file_validation);
+#ifdef VOXEL_ENABLE_GPU
+	VOXEL_TEST(test_voxel_graph_sgn_bad_shader_gpu_generation_fallback);
+#endif
+	VOXEL_TEST(test_voxel_graph_script_node_contract);
+	VOXEL_TEST(test_voxel_graph_script_node_cpu_execution);
+	VOXEL_TEST(test_voxel_graph_script_node_debug_compile_does_not_emit_changed);
+	VOXEL_TEST(test_voxel_graph_script_node_port_refresh);
+	VOXEL_TEST(test_voxel_graph_script_node_copy_keeps_connections_after_reload);
+#ifdef TOOLS_ENABLED
+	VOXEL_TEST(test_voxel_graph_sgn_inspector_hides_validation_properties);
+	VOXEL_TEST(test_voxel_graph_editor_create_dynamic_layout_node);
+#endif
 
 	print_line("------------ Voxel tests end -------------");
 }
