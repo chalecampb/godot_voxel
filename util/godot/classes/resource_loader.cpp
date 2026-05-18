@@ -26,4 +26,12 @@ Ref<Resource> load_resource(const String &path) {
 #endif
 }
 
+Ref<Resource> reload_resource(const String &path) {
+#if defined(ZN_GODOT)
+	return ResourceLoader::load(path, "", ResourceFormatLoader::CACHE_MODE_REPLACE);
+#elif defined(ZN_GODOT_EXTENSION)
+	return ResourceLoader::get_singleton()->load(path, "", ResourceLoader::CACHE_MODE_REPLACE);
+#endif
+}
+
 } // namespace zylann::godot
