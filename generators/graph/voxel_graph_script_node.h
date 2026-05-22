@@ -11,6 +11,9 @@
 #include "../../util/godot/core/variant.h"
 #include "../../util/string/std_string.h"
 #include "program_graph.h"
+#include "voxel_graph_compiler.h"
+#include "voxel_graph_runtime.h"
+#include "voxel_graph_shader_generator.h"
 
 namespace zylann::voxel::pg {
 
@@ -73,6 +76,16 @@ public:
 	bool reload_attached_script();
 	bool reload_script_contract(String path);
 	void refresh_metadata();
+	static Variant create_default_graph_node_resource();
+	static void compile_graph_node(CompileContext &ctx);
+	static void process_graph_node_buffer(Runtime::ProcessBufferContext &ctx);
+	static void analyze_graph_node_range(Runtime::RangeAnalysisContext &ctx);
+	static void generate_graph_node_shader(ShaderGenContext &ctx);
+	static void update_registered_graph_node_layout(
+			ProgramGraph &graph,
+			uint32_t node_id,
+			StdVector<ProgramGraph::Connection> *removed_connections
+	);
 	void update_graph_node_layout(
 			ProgramGraph &graph,
 			uint32_t node_id,
