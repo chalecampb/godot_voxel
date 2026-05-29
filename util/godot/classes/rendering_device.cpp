@@ -52,10 +52,11 @@ Ref<RDShaderSPIRV> shader_compile_spirv_from_source(RenderingDevice &rd, RDShade
 #endif
 }
 
-RID shader_create_from_spirv(RenderingDevice &rd, RDShaderSPIRV &p_spirv, String name) {
 #if defined(ZN_GODOT)
-	// This is a copy of `RenderingDevice::_shader_create_from_spirv` because it's private
 
+namespace {
+
+Vector<RenderingDevice::ShaderStageSPIRVData> get_shader_stage_spirv_data(RDShaderSPIRV &p_spirv) {
 	Vector<RenderingDevice::ShaderStageSPIRVData> stage_data;
 	for (int i = 0; i < RD::SHADER_STAGE_MAX; i++) {
 		RenderingDevice::ShaderStage stage = RenderingDevice::ShaderStage(i);
@@ -63,7 +64,7 @@ RID shader_create_from_spirv(RenderingDevice &rd, RDShaderSPIRV &p_spirv, String
 		String error = p_spirv.get_stage_compile_error(stage);
 		ERR_FAIL_COND_V_MSG(
 				!error.is_empty(),
-				RID(),
+				Vector<RenderingDevice::ShaderStageSPIRVData>(),
 				"Can't create a shader from an errored bytecode. Check errors in source bytecode."
 		);
 
@@ -81,12 +82,45 @@ RID shader_create_from_spirv(RenderingDevice &rd, RDShaderSPIRV &p_spirv, String
 #endif
 		stage_data.push_back(sd);
 	}
+	return stage_data;
+}
 
+} // namespace
+
+#endif
+
+PackedByteArray shader_compile_binary_from_spirv(RenderingDevice &rd, RDShaderSPIRV &p_spirv, String name) {
+#if defined(ZN_GODOT)
+	const Vector<RenderingDevice::ShaderStageSPIRVData> stage_data = get_shader_stage_spirv_data(p_spirv);
+	ERR_FAIL_COND_V(stage_data.is_empty(), PackedByteArray());
+	return rd.shader_compile_binary_from_spirv(stage_data, name);
+
+#elif defined(ZN_GODOT_EXTENSION)
+	Ref<RDShaderSPIRV> spirv_data_ref(&p_spirv);
+	return rd.shader_compile_binary_from_spirv(spirv_data_ref, name);
+#endif
+}
+
+RID shader_create_from_spirv(RenderingDevice &rd, RDShaderSPIRV &p_spirv, String name) {
+#if defined(ZN_GODOT)
+	// This is a copy of `RenderingDevice::_shader_create_from_spirv` because it's private
+
+	const Vector<RenderingDevice::ShaderStageSPIRVData> stage_data = get_shader_stage_spirv_data(p_spirv);
+	ERR_FAIL_COND_V(stage_data.is_empty(), RID());
 	return rd.shader_create_from_spirv(stage_data, name);
 
 #elif defined(ZN_GODOT_EXTENSION)
 	Ref<RDShaderSPIRV> spirv_data_ref(&p_spirv);
 	return rd.shader_create_from_spirv(spirv_data_ref, name);
+#endif
+}
+
+RID shader_create_from_bytecode(RenderingDevice &rd, const PackedByteArray &p_bytecode) {
+#if defined(ZN_GODOT)
+	return rd.shader_create_from_bytecode(p_bytecode);
+
+#elif defined(ZN_GODOT_EXTENSION)
+	return rd.shader_create_from_bytecode(p_bytecode);
 #endif
 }
 
