@@ -1735,12 +1735,6 @@ void VoxelLodTerrain::apply_data_block_response(VoxelEngine::BlockDataOutput &ob
 		}
 		if (!was_loading) {
 			// That block was not requested, or is no longer needed. drop it...
-			ZN_PRINT_VERBOSE(
-					format("Ignoring block {} lod {}, it was not in loading blocks (terrain {})",
-						   ob.position,
-						   static_cast<int>(ob.lod_index),
-						   this)
-			);
 			++_stats.dropped_block_loads;
 			return;
 		}
