@@ -693,6 +693,10 @@ void VoxelStreamSQLite::_bind_methods() {
 	);
 
 	ADD_PROPERTY(
+			PropertyInfo(Variant::BOOL, "key_cache_enabled"), "set_key_cache_enabled", "is_key_cache_enabled"
+	);
+
+	ADD_PROPERTY(
 			PropertyInfo(
 					Variant::INT,
 					"preferred_coordinate_format",
