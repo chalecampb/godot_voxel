@@ -2033,6 +2033,32 @@ void test_voxel_graph_image() {
 				image, Box3i(Vector3i(-24, -8, -8), Vector3i(16, 16, 16)), math::Interval(0.5f, 0.5f).padded(0.01f)
 		);
 	}
+#ifdef VOXEL_ENABLE_GPU
+	{
+		Ref<VoxelGeneratorGraph> generator;
+		generator.instantiate();
+		VoxelGraphFunction &g = **generator->get_main_function();
+
+		const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+		const uint32_t n_z = g.create_node(VoxelGraphFunction::NODE_INPUT_Z);
+		const uint32_t n_image = g.create_node(VoxelGraphFunction::NODE_IMAGE_2D);
+		const uint32_t n_out_sdf = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+
+		Ref<Image> image = zylann::godot::create_empty_image(8, 4, false, Image::FORMAT_R8);
+		image->fill(Color(0.5f, 0, 0));
+		g.set_node_param(n_image, 0, image);
+		g.set_node_param(n_image, 1, 1);
+
+		g.add_connection(n_x, 0, n_image, 0);
+		g.add_connection(n_z, 0, n_image, 1);
+		g.add_connection(n_image, 0, n_out_sdf, 0);
+
+		VoxelGenerator::ShaderSourceData ssd;
+		ZN_TEST_ASSERT(generator->get_shader_source(ssd));
+		ZN_TEST_ASSERT(ssd.parameters.size() == 1);
+		ZN_TEST_ASSERT(ssd.glsl.find("texelFetch") != -1);
+	}
+#endif
 }
 
 void test_voxel_graph_many_weight_outputs() {

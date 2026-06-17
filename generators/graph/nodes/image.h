@@ -1,4 +1,5 @@
 #include "../../../constants/voxel_constants.h"
+#include "../../../engine/gpu/compute_shader_resource.h"
 #include "../../../util/godot/classes/image.h"
 #include "../../../util/profiling.h"
 #include "../image_range_grid.h"
@@ -198,6 +199,65 @@ void register_image_nodes(Span<NodeType> types) {
 				ctx.set_output(0, p.image_range_grid->get_range_repeat({ x.min, x.max + 1 }, { y.min, y.max + 1 }));
 			}
 		};
+#ifdef VOXEL_ENABLE_GPU
+		t.shader_gen_func = [](ShaderGenContext &ctx) {
+			Ref<Image> image = ctx.get_param(0);
+			if (image.is_null()) {
+				ctx.make_error(String(ZN_TTR("{0} instance is null")).format(varray(Image::get_class_static())));
+				return;
+			}
+			if (image->is_compressed()) {
+				ctx.make_error(String(ZN_TTR("{0} has a compressed format, this is not supported"))
+									   .format(varray(Image::get_class_static())));
+				return;
+			}
+			if (image->is_empty()) {
+				ctx.make_error(String(ZN_TTR("{0} is empty").format(varray(Image::get_class_static()))));
+				return;
+			}
+
+			const StdString uniform_texture =
+					ctx.add_uniform(ComputeShaderResourceFactory::create_texture_2d(image));
+			const Filter filter = static_cast<Filter>(static_cast<int>(ctx.get_param(1)));
+
+			if (filter == FILTER_NEAREST) {
+				ctx.add_format(
+						"ivec2 image_size = textureSize({}, 0);\n"
+						"ivec2 image_pos = ivec2(int({}), int({}));\n"
+						"image_pos = (image_pos % image_size + image_size) % image_size;\n"
+						"{} = texelFetch({}, image_pos, 0).r;\n",
+						uniform_texture,
+						ctx.get_input_name(0),
+						ctx.get_input_name(1),
+						ctx.get_output_name(0),
+						uniform_texture
+				);
+			} else {
+				ctx.add_format(
+						"ivec2 image_size = textureSize({}, 0);\n"
+						"vec2 image_pos = vec2({}, {});\n"
+						"ivec2 image_pos0 = ivec2(floor(image_pos));\n"
+						"ivec2 image_pos1 = image_pos0 + ivec2(1);\n"
+						"vec2 image_frac = image_pos - vec2(image_pos0);\n"
+						"image_pos0 = (image_pos0 % image_size + image_size) % image_size;\n"
+						"image_pos1 = (image_pos1 % image_size + image_size) % image_size;\n"
+						"float image_h00 = texelFetch({}, image_pos0, 0).r;\n"
+						"float image_h10 = texelFetch({}, ivec2(image_pos1.x, image_pos0.y), 0).r;\n"
+						"float image_h01 = texelFetch({}, ivec2(image_pos0.x, image_pos1.y), 0).r;\n"
+						"float image_h11 = texelFetch({}, image_pos1, 0).r;\n"
+						"{} = mix(mix(image_h00, image_h10, image_frac.x), mix(image_h01, image_h11, image_frac.x), image_frac.y);\n",
+						uniform_texture,
+						ctx.get_input_name(0),
+						ctx.get_input_name(1),
+						uniform_texture,
+						uniform_texture,
+						uniform_texture,
+						uniform_texture,
+						ctx.get_output_name(0)
+				);
+			}
+		};
+#endif
 	}
 	{
 		struct Params {
