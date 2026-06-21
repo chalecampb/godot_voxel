@@ -6,7 +6,6 @@
 #include "../streams/load_block_data_task.h"
 #include "../streams/save_block_data_task.h"
 #include "../util/godot/classes/os.h"
-#include "../util/godot/classes/project_settings.h"
 #include "../util/godot/classes/rd_sampler_state.h"
 #include "../util/godot/classes/rendering_server.h"
 #include "../util/godot/classes/time.h"
@@ -94,42 +93,12 @@ VoxelEngine::~VoxelEngine() {
 #endif
 }
 
-static bool auto_detect_threaded_graphics_resource_building_support() {
-	const ProjectSettings *project = ProjectSettings::get_singleton();
-	ZN_ASSERT_RETURN_V(project != nullptr, false);
-
-	const zylann::godot::RenderThreadModel rendering_thread_model = zylann::godot::get_render_thread_model(*project);
-	const zylann::godot::RenderMethod rendering_method = zylann::godot::get_current_rendering_method();
-	const zylann::godot::RenderDriverName driver = zylann ::godot::get_current_rendering_driver();
-
-	if (!zylann::godot::is_render_thread_model_safe(rendering_thread_model)) {
-		return false;
-	}
-
-	switch (rendering_method) {
-		case zylann::godot::RENDER_METHOD_GL_COMPATIBILITY:
-			return false;
-		case zylann::godot::RENDER_METHOD_UNKNOWN:
-			return false;
-		default:
-			break;
-	}
-
-	switch (driver) {
-		case zylann::godot::RENDER_DRIVER_OPENGL3:
-		case zylann::godot::RENDER_DRIVER_OPENGL3_ANGLE:
-		case zylann::godot::RENDER_DRIVER_OPENGL3_ES:
-		case zylann::godot::RENDER_DRIVER_UNKNOWN:
-			return false;
-		default:
-			return true;
-	}
-}
-
 void VoxelEngine::try_initialize_gpu_features() {
-	_threaded_graphics_resource_building_enabled = auto_detect_threaded_graphics_resource_building_support();
+	// Building RenderingServer-backed resources in worker threads is allowed with Vulkan, but completed resources must
+	// still be throttled until the main thread applies them to avoid unbounded RenderingServer backlog.
+	_threaded_graphics_resource_building_enabled = true;
 	ZN_PRINT_VERBOSE(format(
-			"Auto-detected threaded graphics resource building: {}", _threaded_graphics_resource_building_enabled
+			"Threaded graphics resource building: {}", _threaded_graphics_resource_building_enabled
 	));
 
 #ifdef VOXEL_ENABLE_GPU

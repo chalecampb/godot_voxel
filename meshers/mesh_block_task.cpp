@@ -1,11 +1,13 @@
 #include "mesh_block_task.h"
 #include "../storage/voxel_data.h"
+#include "../util/containers/std_queue.h"
 #include "../terrain/voxel_mesh_block.h"
 #include "../util/dstack.h"
 #include "../util/godot/classes/mesh.h"
 #include "../util/io/log.h"
 #include "../util/math/conv.h"
 #include "../util/profiling.h"
+#include "../util/thread/mutex.h"
 // #include "../util/string/format.h" // Debug
 #include "../engine/voxel_engine.h"
 
@@ -304,6 +306,121 @@ Ref<ArrayMesh> build_mesh(Array surface) {
 
 namespace {
 std::atomic_int g_debug_mesh_tasks_count = { 0 };
+
+static constexpr uint32_t THREADED_GRAPHICS_RESOURCE_BUILD_LIMIT = 192;
+
+std::atomic_uint32_t g_pending_threaded_graphics_mesh_resources = { 0 };
+std::atomic_uint32_t g_queued_threaded_graphics_resource_builds = { 0 };
+std::atomic_bool g_threaded_graphics_resource_build_queue_draining = { false };
+StdQueue<MeshBlockTask *> g_threaded_graphics_resource_build_queue;
+BinaryMutex g_threaded_graphics_resource_build_queue_mutex;
+
+void drain_threaded_graphics_resource_build_queue();
+
+struct ThreadedGraphicsResourceBuildTicket {
+	~ThreadedGraphicsResourceBuildTicket() {
+		g_pending_threaded_graphics_mesh_resources.fetch_sub(1, std::memory_order_release);
+		drain_threaded_graphics_resource_build_queue();
+	}
+};
+
+UniquePtr<ThreadedGraphicsResourceBuildTicket> try_acquire_threaded_graphics_resource_build_ticket() {
+	uint32_t pending = g_pending_threaded_graphics_mesh_resources.load(std::memory_order_acquire);
+	while (pending < THREADED_GRAPHICS_RESOURCE_BUILD_LIMIT) {
+		if (g_pending_threaded_graphics_mesh_resources.compare_exchange_weak(
+					pending,
+					pending + 1,
+					std::memory_order_acq_rel,
+					std::memory_order_acquire
+			)) {
+			return make_unique_instance<ThreadedGraphicsResourceBuildTicket>();
+		}
+	}
+	return UniquePtr<ThreadedGraphicsResourceBuildTicket>();
+}
+
+void enqueue_threaded_graphics_resource_build(MeshBlockTask *task) {
+	{
+		MutexLock lock(g_threaded_graphics_resource_build_queue_mutex);
+		g_threaded_graphics_resource_build_queue.push(task);
+		g_queued_threaded_graphics_resource_builds.fetch_add(1, std::memory_order_release);
+	}
+	drain_threaded_graphics_resource_build_queue();
+}
+} // namespace
+
+class ArrayMeshBlockTask : public IThreadedTask {
+public:
+	ArrayMeshBlockTask(MeshBlockTask *mesh_task, UniquePtr<ThreadedGraphicsResourceBuildTicket> ticket) :
+			_mesh_task(mesh_task), _ticket(std::move(ticket)) {}
+
+	const char *get_debug_name() const override {
+		return "ArrayMeshBlock";
+	}
+
+	void run(ThreadedTaskContext &ctx) override {
+		ZN_PROFILE_SCOPE();
+		_mesh_task->build_graphics_resources();
+	}
+
+	TaskPriority get_priority() override {
+		return _mesh_task->get_priority();
+	}
+
+	void apply_result() override {
+		_ticket.reset();
+		_mesh_task->apply_result();
+		ZN_DELETE(_mesh_task);
+		_mesh_task = nullptr;
+	}
+
+private:
+	MeshBlockTask *_mesh_task = nullptr;
+	UniquePtr<ThreadedGraphicsResourceBuildTicket> _ticket;
+};
+
+namespace {
+
+void drain_threaded_graphics_resource_build_queue() {
+	if (g_threaded_graphics_resource_build_queue_draining.exchange(true, std::memory_order_acq_rel)) {
+		return;
+	}
+
+	for (;;) {
+		UniquePtr<ThreadedGraphicsResourceBuildTicket> ticket = try_acquire_threaded_graphics_resource_build_ticket();
+		if (ticket == nullptr) {
+			break;
+		}
+
+		MeshBlockTask *task = nullptr;
+		{
+			MutexLock lock(g_threaded_graphics_resource_build_queue_mutex);
+			if (g_threaded_graphics_resource_build_queue.size() != 0) {
+				task = g_threaded_graphics_resource_build_queue.front();
+				g_threaded_graphics_resource_build_queue.pop();
+				g_queued_threaded_graphics_resource_builds.fetch_sub(1, std::memory_order_release);
+			}
+		}
+
+		if (task == nullptr) {
+			ticket.reset();
+			break;
+		}
+
+		VoxelEngine::get_singleton().push_async_task(ZN_NEW(ArrayMeshBlockTask(task, std::move(ticket))));
+	}
+
+	g_threaded_graphics_resource_build_queue_draining.store(false, std::memory_order_release);
+
+	if (
+			g_queued_threaded_graphics_resource_builds.load(std::memory_order_acquire) > 0 &&
+			g_pending_threaded_graphics_mesh_resources.load(std::memory_order_acquire) <
+					THREADED_GRAPHICS_RESOURCE_BUILD_LIMIT
+	) {
+		drain_threaded_graphics_resource_build_queue();
+	}
+}
+
 } // namespace
 
 MeshBlockTask::MeshBlockTask() : _voxels(VoxelBuffer::ALLOCATOR_POOL) {
@@ -365,6 +482,11 @@ void MeshBlockTask::run(zylann::ThreadedTaskContext &ctx) {
 	{
 		gather_voxels_cpu();
 		build_mesh();
+	}
+
+	if (_has_run && require_visual && VoxelEngine::get_singleton().is_threaded_graphics_resource_building_enabled()) {
+		enqueue_threaded_graphics_resource_build(this);
+		ctx.status = ThreadedTaskContext::STATUS_TAKEN_OUT;
 	}
 }
 
@@ -578,27 +700,38 @@ void MeshBlockTask::build_mesh() {
 	}
 #endif
 
-	if (require_visual && VoxelEngine::get_singleton().is_threaded_graphics_resource_building_enabled()) {
-		// This can only run if the engine supports building meshes from multiple threads
+	_has_mesh_resource = false;
+	_has_run = true;
+}
 
+void MeshBlockTask::build_graphics_resources() {
+	ZN_PROFILE_SCOPE();
+	ZN_PROFILE_PLOT(
+			"Threaded graphics resource builds pending",
+			int64_t(g_pending_threaded_graphics_mesh_resources.load(std::memory_order_acquire))
+	);
+	ZN_PROFILE_PLOT(
+			"Threaded graphics resource builds queued",
+			int64_t(g_queued_threaded_graphics_resource_builds.load(std::memory_order_acquire))
+	);
+
+	// This can only run if the engine supports building meshes from multiple threads.
+	{
+		ZN_PROFILE_SCOPE_NAMED("Build ArrayMesh resource");
 		_mesh = zylann::voxel::build_mesh(
 				to_span(_surfaces_output.surfaces),
 				_surfaces_output.primitive_type,
 				_surfaces_output.mesh_flags,
 				_mesh_material_indices
 		);
-
-		if (_surfaces_output.shadow_occluder.size() > 0) {
-			_shadow_occluder_mesh = zylann::voxel::build_mesh(_surfaces_output.shadow_occluder);
-		}
-
-		_has_mesh_resource = true;
-
-	} else {
-		_has_mesh_resource = false;
 	}
 
-	_has_run = true;
+	if (_surfaces_output.shadow_occluder.size() > 0) {
+		ZN_PROFILE_SCOPE_NAMED("Build shadow ArrayMesh resource");
+		_shadow_occluder_mesh = zylann::voxel::build_mesh(_surfaces_output.shadow_occluder);
+	}
+
+	_has_mesh_resource = true;
 }
 
 TaskPriority MeshBlockTask::get_priority() {

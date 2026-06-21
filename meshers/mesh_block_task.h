@@ -22,6 +22,7 @@
 namespace zylann::voxel {
 
 class VoxelData;
+class ArrayMeshBlockTask;
 
 // Asynchronous task generating a mesh from voxel blocks and their neighbors, in a particular volume
 class MeshBlockTask
@@ -81,11 +82,14 @@ public:
 	TaskCancellationToken cancellation_token;
 
 private:
+	friend class ArrayMeshBlockTask;
+
 #ifdef VOXEL_ENABLE_GPU
 	void gather_voxels_gpu(zylann::ThreadedTaskContext &ctx);
 #endif
 	void gather_voxels_cpu();
 	void build_mesh();
+	void build_graphics_resources();
 
 	bool _has_run = false;
 	bool _too_far = false;
