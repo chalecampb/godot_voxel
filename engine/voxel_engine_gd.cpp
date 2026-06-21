@@ -59,6 +59,12 @@ VoxelEngine::Config VoxelEngine::get_config_from_godot() {
 			Variant::INT, "voxel/threads/main/time_budget_ms", PROPERTY_HINT_RANGE, "0,1000", 8, true
 	);
 
+#ifdef VOXEL_ENABLE_GPU
+	add_custom_project_setting(
+			Variant::INT, "voxel/gpu/compute/max_in_flight_batches", PROPERTY_HINT_RANGE, "1,4", 1, true
+	);
+#endif
+
 	add_custom_project_setting(Variant::BOOL, "voxel/ownership_checks", PROPERTY_HINT_NONE, "", true, true);
 
 	add_custom_project_setting(Variant::BOOL, "voxel/shaders/shader_cache/enabled", PROPERTY_HINT_NONE, "Enable the shader cache, which stores compute shader binaries for faster loading.", true, false);
@@ -73,6 +79,11 @@ VoxelEngine::Config VoxelEngine::get_config_from_godot() {
 	// Portion of available CPU threads to attempt using
 	config.inner.thread_count_ratio_over_max =
 			math::clamp(float(ps.get("voxel/threads/count/ratio_over_max")), 0.f, 1.f);
+
+#ifdef VOXEL_ENABLE_GPU
+	config.inner.gpu_compute_max_in_flight_batches =
+			static_cast<unsigned int>(math::clamp(int(ps.get("voxel/gpu/compute/max_in_flight_batches")), 1, 4));
+#endif
 
 	config.ownership_checks = ps.get("voxel/ownership_checks");
 

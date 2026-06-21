@@ -155,6 +155,9 @@ public:
 		// Portion of available CPU threads to attempt using
 		float thread_count_ratio_over_max = 0.5;
 		unsigned int main_thread_budget_usec = DEFAULT_MAIN_THREAD_BUDGET_USEC;
+#ifdef VOXEL_ENABLE_GPU
+		unsigned int gpu_compute_max_in_flight_batches = 1;
+#endif
 	};
 
 	static VoxelEngine &get_singleton();

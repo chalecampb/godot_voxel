@@ -60,6 +60,14 @@ VoxelEngine::VoxelEngine(Config config) {
 	_general_thread_pool.set_thread_count(thread_count);
 	_general_thread_pool.set_priority_update_period(200);
 
+#ifdef VOXEL_ENABLE_GPU
+	{
+		GPUTaskRunner::Config gpu_config;
+		gpu_config.max_in_flight_batches = config.gpu_compute_max_in_flight_batches;
+		_gpu_task_runner.set_config(gpu_config);
+	}
+#endif
+
 	// Init world
 	_world.shared_priority_dependency = make_shared_instance<PriorityDependency::ViewersData>();
 	// Give initial capacity to make invalidation less likely
