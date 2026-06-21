@@ -9,6 +9,7 @@
 #include "../util/godot/classes/project_settings.h"
 #include "../util/godot/classes/rd_sampler_state.h"
 #include "../util/godot/classes/rendering_server.h"
+#include "../util/godot/classes/time.h"
 #include "../util/io/log.h"
 #include "../util/macros.h"
 #include "../util/math/conv.h"
@@ -316,6 +317,9 @@ void VoxelEngine::process() {
 			int64_t(StdDefaultAllocatorCounters::g_allocated - StdDefaultAllocatorCounters::g_deallocated)
 	);
 
+	const Time &time = *Time::get_singleton();
+	const uint64_t process_start_usec = time.get_ticks_usec();
+
 	// Receive generation and meshing results
 	_general_thread_pool.dequeue_completed_tasks([](zylann::IThreadedTask *task) {
 		task->apply_result();
@@ -324,7 +328,10 @@ void VoxelEngine::process() {
 
 	// Run this after dequeueing threaded tasks, because they can add some to this runner,
 	// which could in turn complete right away (we avoid 1-frame delays this way).
-	_time_spread_task_runner.process(_main_thread_time_budget_usec);
+	const uint64_t elapsed_usec = time.get_ticks_usec() - process_start_usec;
+	const uint64_t time_spread_budget_usec =
+			elapsed_usec < _main_thread_time_budget_usec ? _main_thread_time_budget_usec - elapsed_usec : 1;
+	_time_spread_task_runner.process(time_spread_budget_usec);
 
 	_progressive_task_runner.process();
 

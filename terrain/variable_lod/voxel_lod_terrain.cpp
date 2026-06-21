@@ -94,6 +94,23 @@ void copy_vlt_block_params(ShaderMaterial &src, ShaderMaterial &dst) {
 	copy_param(src, dst, sn.u_voxel_lod_info);
 }
 
+bool has_pending_main_thread_update_work(const VoxelLodTerrainUpdateData::State &state, const unsigned int lod_count) {
+	for (unsigned int lod_index = 0; lod_index < lod_count; ++lod_index) {
+		if (state.lods[lod_index].has_main_thread_update_work()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool postpone_if_time_budget_exceeded(TimeSpreadTaskContext &ctx) {
+	if (ctx.is_time_budget_exceeded()) {
+		ctx.postpone = true;
+		return true;
+	}
+	return false;
+}
+
 } // namespace
 
 void VoxelLodTerrain::ApplyMeshUpdateTask::run(TimeSpreadTaskContext &ctx) {
@@ -117,6 +134,24 @@ void VoxelLodTerrain::ApplyMeshUpdateTask::run(TimeSpreadTaskContext &ctx) {
 	}
 
 	self->apply_mesh_update(data);
+}
+
+void VoxelLodTerrain::ApplyMainThreadUpdateTask::run(TimeSpreadTaskContext &ctx) {
+	if (!VoxelEngine::get_singleton().is_volume_valid(volume_id)) {
+		// The node can have been destroyed while this task was still pending
+		ZN_PRINT_VERBOSE("Cancelling ApplyMainThreadUpdateTask, volume_id is invalid");
+		return;
+	}
+
+	if (self->apply_main_thread_update_tasks(ctx)) {
+		self->_main_thread_update_task_pending = false;
+		for (StdUnorderedSet<const VoxelMeshBlockVLT *> &activated_blocks :
+				self->_main_thread_update_activated_visual_blocks) {
+			activated_blocks.clear();
+		}
+	} else {
+		ctx.postpone = true;
+	}
 }
 
 VoxelLodTerrain::VoxelLodTerrain() {
@@ -151,7 +186,7 @@ VoxelLodTerrain::VoxelLodTerrain() {
 		task->volume_id = self->get_volume_id();
 		task->self = self;
 		task->data = std::move(ob);
-		VoxelEngine::get_singleton().push_main_thread_time_spread_task(task);
+		VoxelEngine::get_singleton().push_main_thread_time_spread_task(task, TimeSpreadTaskRunner::PRIORITY_LOW);
 
 		// If two tasks are queued for the same mesh, cancel the old ones.
 		// This is for cases where creating the mesh is slower than the speed at which it is generated,
@@ -1271,7 +1306,33 @@ void VoxelLodTerrain::process(float delta) {
 	if (_update_data->task_is_complete) {
 		ZN_PROFILE_SCOPE();
 
-		apply_main_thread_update_tasks();
+		if (_main_thread_update_task_pending) {
+			process_fading_blocks(delta);
+			return;
+		}
+
+		const auto schedule_main_thread_update_task = [this]() {
+			for (StdUnorderedSet<const VoxelMeshBlockVLT *> &activated_blocks :
+					_main_thread_update_activated_visual_blocks) {
+				activated_blocks.clear();
+			}
+
+			ApplyMainThreadUpdateTask *apply_task = ZN_NEW(ApplyMainThreadUpdateTask);
+			apply_task->volume_id = get_volume_id();
+			apply_task->self = this;
+			_main_thread_update_task_pending = true;
+			VoxelEngine::get_singleton().push_main_thread_time_spread_task(apply_task);
+		};
+
+		if (has_pending_main_thread_update_work(_update_data->state, get_lod_count())) {
+			schedule_main_thread_update_task();
+			process_fading_blocks(delta);
+			return;
+		}
+
+		TimeSpreadTaskContext immediate_apply_ctx;
+		const bool applied = apply_main_thread_update_tasks(immediate_apply_ctx);
+		ZN_ASSERT(applied);
 
 		// Get viewer location in voxel space
 		const Vector3 viewer_pos = get_local_viewer_pos();
@@ -1310,7 +1371,13 @@ void VoxelLodTerrain::process(float delta) {
 			ThreadedTaskContext ctx(0, TaskPriority());
 			task->run(ctx);
 			ZN_DELETE(task);
-			apply_main_thread_update_tasks();
+			if (has_pending_main_thread_update_work(_update_data->state, get_lod_count())) {
+				schedule_main_thread_update_task();
+			} else {
+				TimeSpreadTaskContext immediate_apply_ctx_after_sync_update;
+				const bool applied_after_sync_update = apply_main_thread_update_tasks(immediate_apply_ctx_after_sync_update);
+				ZN_ASSERT(applied_after_sync_update);
+			}
 		}
 	}
 
@@ -1318,7 +1385,7 @@ void VoxelLodTerrain::process(float delta) {
 	process_fading_blocks(delta);
 }
 
-void VoxelLodTerrain::apply_main_thread_update_tasks() {
+bool VoxelLodTerrain::apply_main_thread_update_tasks(TimeSpreadTaskContext &ctx) {
 	ZN_PROFILE_SCOPE();
 	// Dequeue outputs of the threadable part of the update for actions taking place on the main thread
 
@@ -1333,98 +1400,144 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 	const unsigned int lod_count = get_lod_count();
 
 	// Apply quick reloads
-	for (unsigned int lod_index = 0; lod_index < lod_count; ++lod_index) {
-		VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
-		for (const VoxelLodTerrainUpdateData::QuickReloadingBlock &qrb : lod.quick_reloading_blocks) {
-			ZN_PROFILE_SCOPE_NAMED("Quick reload");
-			VoxelEngine::BlockDataOutput ob{
-				VoxelEngine::BlockDataOutput::TYPE_LOADED, //
-				qrb.voxels, //
+	{
+		ZN_PROFILE_SCOPE_NAMED("Apply quick reloads");
+		for (unsigned int lod_index = 0; lod_index < lod_count; ++lod_index) {
+			VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
+			while (lod.quick_reloading_blocks.size() > 0) {
+				ZN_PROFILE_SCOPE_NAMED("Quick reload");
+				const VoxelLodTerrainUpdateData::QuickReloadingBlock qrb = lod.quick_reloading_blocks.back();
+				lod.quick_reloading_blocks.pop_back();
+				VoxelEngine::BlockDataOutput ob{
+					VoxelEngine::BlockDataOutput::TYPE_LOADED, //
+					qrb.voxels, //
 #ifdef VOXEL_ENABLE_INSTANCER
-				// TODO This doesn't work with VoxelInstancer because it unloads based on meshes...
-				nullptr, //
+					// TODO This doesn't work with VoxelInstancer because it unloads based on meshes...
+					nullptr, //
 #endif
-				qrb.position, //
-				static_cast<uint8_t>(lod_index), //
-				false, // dropped
-				false, // max_lod_hint
-				false, // initial_load
-				false, // had_instances
-				true // had_voxels
-			};
-			apply_data_block_response(ob);
+					qrb.position, //
+					static_cast<uint8_t>(lod_index), //
+					false, // dropped
+					false, // max_lod_hint
+					false, // initial_load
+					false, // had_instances
+					true // had_voxels
+				};
+				apply_data_block_response(ob);
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
+			}
 		}
-		lod.quick_reloading_blocks.clear();
 	}
 
 	for (unsigned int lod_index = 0; lod_index < lod_count; ++lod_index) {
+		ZN_PROFILE_SCOPE_NAMED("Apply LOD main-thread updates");
 		VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
 		VoxelMeshMap<VoxelMeshBlockVLT> &mesh_map = _mesh_maps_per_lod[lod_index];
-		StdUnorderedSet<const VoxelMeshBlockVLT *> activated_visual_blocks;
+		StdUnorderedSet<const VoxelMeshBlockVLT *> &activated_visual_blocks =
+				_main_thread_update_activated_visual_blocks[lod_index];
 
 		const int mesh_block_size = get_mesh_block_size() << lod_index;
 
-		for (unsigned int i = 0; i < lod.mesh_blocks_to_activate_visuals.size(); ++i) {
-			const Vector3i bpos = lod.mesh_blocks_to_activate_visuals[i];
-			VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
-			// Can be null if there is actually no surface at this location
-			if (block == nullptr) {
-				continue;
+		{
+			ZN_PROFILE_SCOPE_NAMED("Activate visual mesh blocks");
+			while (lod.mesh_blocks_to_activate_visuals.size() > 0) {
+				const Vector3i bpos = lod.mesh_blocks_to_activate_visuals.back();
+				lod.mesh_blocks_to_activate_visuals.pop_back();
+				VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
+				// Can be null if there is actually no surface at this location
+				if (block == nullptr) {
+					if (postpone_if_time_budget_exceeded(ctx)) {
+						return false;
+					}
+					continue;
+				}
+				// ERR_CONTINUE(block == nullptr);
+				bool with_fading = false;
+				if (_lod_fade_duration > 0.f) {
+					const Vector3 block_center = volume_transform.xform(
+							to_vec3(block->position * mesh_block_size + Vector3iUtil::create(mesh_block_size / 2))
+					);
+					// Don't start fading on blocks behind the camera
+					with_fading = camera.forward.dot(block_center - camera.position) > 0.0;
+				}
+				set_mesh_block_visual_active(*block, true, with_fading, lod_index);
+				activated_visual_blocks.insert(block);
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
 			}
-			// ERR_CONTINUE(block == nullptr);
-			bool with_fading = false;
-			if (_lod_fade_duration > 0.f) {
-				const Vector3 block_center = volume_transform.xform(
-						to_vec3(block->position * mesh_block_size + Vector3iUtil::create(mesh_block_size / 2))
-				);
-				// Don't start fading on blocks behind the camera
-				with_fading = camera.forward.dot(block_center - camera.position) > 0.0;
-			}
-			set_mesh_block_visual_active(*block, true, with_fading, lod_index);
-			activated_visual_blocks.insert(block);
 		}
 
-		for (unsigned int i = 0; i < lod.mesh_blocks_to_deactivate_visuals.size(); ++i) {
-			const Vector3i bpos = lod.mesh_blocks_to_deactivate_visuals[i];
-			VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
-			// Can be null if there is actually no surface at this location
-			if (block == nullptr) {
-				continue;
+		{
+			ZN_PROFILE_SCOPE_NAMED("Deactivate visual mesh blocks");
+			while (lod.mesh_blocks_to_deactivate_visuals.size() > 0) {
+				const Vector3i bpos = lod.mesh_blocks_to_deactivate_visuals.back();
+				lod.mesh_blocks_to_deactivate_visuals.pop_back();
+				VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
+				// Can be null if there is actually no surface at this location
+				if (block == nullptr) {
+					if (postpone_if_time_budget_exceeded(ctx)) {
+						return false;
+					}
+					continue;
+				}
+				// ERR_CONTINUE(block == nullptr);
+				bool with_fading = false;
+				if (_lod_fade_duration > 0.f) {
+					const Vector3 block_center = volume_transform.xform(
+							to_vec3(block->position * mesh_block_size + Vector3iUtil::create(mesh_block_size / 2))
+					);
+					// Don't start fading on blocks behind the camera
+					with_fading = camera.forward.dot(block_center - camera.position) > 0.0;
+				}
+				set_mesh_block_visual_active(*block, false, with_fading, lod_index);
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
 			}
-			// ERR_CONTINUE(block == nullptr);
-			bool with_fading = false;
-			if (_lod_fade_duration > 0.f) {
-				const Vector3 block_center = volume_transform.xform(
-						to_vec3(block->position * mesh_block_size + Vector3iUtil::create(mesh_block_size / 2))
-				);
-				// Don't start fading on blocks behind the camera
-				with_fading = camera.forward.dot(block_center - camera.position) > 0.0;
-			}
-			set_mesh_block_visual_active(*block, false, with_fading, lod_index);
 		}
 
-		for (const Vector3i bpos : lod.mesh_blocks_to_activate_collision) {
-			VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
-			// Can be null if there is actually no surface at this location
-			if (block == nullptr) {
-				continue;
+		{
+			ZN_PROFILE_SCOPE_NAMED("Activate collision mesh blocks");
+			while (lod.mesh_blocks_to_activate_collision.size() > 0) {
+				const Vector3i bpos = lod.mesh_blocks_to_activate_collision.back();
+				lod.mesh_blocks_to_activate_collision.pop_back();
+				VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
+				// Can be null if there is actually no surface at this location
+				if (block == nullptr) {
+					if (postpone_if_time_budget_exceeded(ctx)) {
+						return false;
+					}
+					continue;
+				}
+				block->set_collision_enabled(true);
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
 			}
-			block->set_collision_enabled(true);
 		}
 
-		for (const Vector3i bpos : lod.mesh_blocks_to_deactivate_collision) {
-			VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
-			// Can be null if there is actually no surface at this location
-			if (block == nullptr) {
-				continue;
+		{
+			ZN_PROFILE_SCOPE_NAMED("Deactivate collision mesh blocks");
+			while (lod.mesh_blocks_to_deactivate_collision.size() > 0) {
+				const Vector3i bpos = lod.mesh_blocks_to_deactivate_collision.back();
+				lod.mesh_blocks_to_deactivate_collision.pop_back();
+				VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
+				// Can be null if there is actually no surface at this location
+				if (block == nullptr) {
+					if (postpone_if_time_budget_exceeded(ctx)) {
+						return false;
+					}
+					continue;
+				}
+				block->set_collision_enabled(false);
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
 			}
-			block->set_collision_enabled(false);
 		}
-
-		lod.mesh_blocks_to_activate_visuals.clear();
-		lod.mesh_blocks_to_deactivate_visuals.clear();
-		lod.mesh_blocks_to_activate_collision.clear();
-		lod.mesh_blocks_to_deactivate_collision.clear();
 
 		/*
 #ifdef DEBUG_ENABLED
@@ -1432,43 +1545,66 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 #endif
 		*/
 
-		for (const Vector3i bpos : lod.mesh_blocks_to_drop_visual) {
-			VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
-			// Can be null if there is actually no surface at this location
-			if (block == nullptr) {
-				continue;
-			}
-			block->drop_visuals();
-			remove_shader_material_from_block(*block, _shader_material_pool);
-			// Also update the state in the threaded representation
-			auto it = lod.mesh_map_state.map.find(bpos);
-			if (it != lod.mesh_map_state.map.end()) {
-				it->second.visual_loaded = false;
-			}
-			// TODO When moving out of a region that already has collision-only viewers (causing the present visual-only
-			// unload), we may want to fade visuals the same way we do when the whole block is removed?
+		{
+			ZN_PROFILE_SCOPE_NAMED("Drop visual mesh blocks");
+			while (lod.mesh_blocks_to_drop_visual.size() > 0) {
+				const Vector3i bpos = lod.mesh_blocks_to_drop_visual.back();
+				lod.mesh_blocks_to_drop_visual.pop_back();
+				VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
+				// Can be null if there is actually no surface at this location
+				if (block == nullptr) {
+					if (postpone_if_time_budget_exceeded(ctx)) {
+						return false;
+					}
+					continue;
+				}
+				block->drop_visuals();
+				remove_shader_material_from_block(*block, _shader_material_pool);
+				// Also update the state in the threaded representation
+				auto it = lod.mesh_map_state.map.find(bpos);
+				if (it != lod.mesh_map_state.map.end()) {
+					it->second.visual_loaded = false;
+				}
+				// TODO When moving out of a region that already has collision-only viewers (causing the present visual-only
+				// unload), we may want to fade visuals the same way we do when the whole block is removed?
 
-			// `drop_visual` will cancel fading if any
-			StdMap<Vector3i, VoxelMeshBlockVLT *> &fading_map = _fading_blocks_per_lod[lod_index];
-			fading_map.erase(bpos);
+				// `drop_visual` will cancel fading if any
+				StdMap<Vector3i, VoxelMeshBlockVLT *> &fading_map = _fading_blocks_per_lod[lod_index];
+				fading_map.erase(bpos);
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
+			}
 		}
-		lod.mesh_blocks_to_drop_visual.clear();
 
-		for (const Vector3i bpos : lod.mesh_blocks_to_drop_collision) {
-			VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
-			if (block == nullptr) {
-				continue;
+		{
+			ZN_PROFILE_SCOPE_NAMED("Drop collision mesh blocks");
+			while (lod.mesh_blocks_to_drop_collision.size() > 0) {
+				const Vector3i bpos = lod.mesh_blocks_to_drop_collision.back();
+				lod.mesh_blocks_to_drop_collision.pop_back();
+				VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
+				if (block == nullptr) {
+					if (postpone_if_time_budget_exceeded(ctx)) {
+						return false;
+					}
+					continue;
+				}
+				block->drop_collision();
+				block->set_collision_enabled(false);
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
 			}
-			block->drop_collision();
-			block->set_collision_enabled(false);
 		}
-		lod.mesh_blocks_to_drop_collision.clear();
 
-		for (unsigned int i = 0; i < lod.mesh_blocks_to_unload.size(); ++i) {
-			const Vector3i bpos = lod.mesh_blocks_to_unload[i];
+		{
+			ZN_PROFILE_SCOPE_NAMED("Unload mesh blocks");
+			while (lod.mesh_blocks_to_unload.size() > 0) {
+				const Vector3i bpos = lod.mesh_blocks_to_unload.back();
+				lod.mesh_blocks_to_unload.pop_back();
 
-			StdMap<Vector3i, VoxelMeshBlockVLT *> &fading_blocks_in_current_lod = _fading_blocks_per_lod[lod_index];
-			auto fading_block_it = fading_blocks_in_current_lod.find(bpos);
+				StdMap<Vector3i, VoxelMeshBlockVLT *> &fading_blocks_in_current_lod = _fading_blocks_per_lod[lod_index];
+				auto fading_block_it = fading_blocks_in_current_lod.find(bpos);
 
 			if (_lod_fade_duration > 0.f) {
 				// Trigger fading out if the block was visible.
@@ -1566,28 +1702,38 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 			debug_removed_blocks.insert(bpos);
 #endif
 			*/
-			// Blocks in the update queue will be cancelled in _process,
-			// because it's too expensive to linear-search all blocks for each block
+				// Blocks in the update queue will be cancelled in _process,
+				// because it's too expensive to linear-search all blocks for each block
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
+			}
 		}
 
-		for (unsigned int i = 0; i < lod.mesh_blocks_to_update_transitions.size(); ++i) {
-			const VoxelLodTerrainUpdateData::TransitionUpdate tu = lod.mesh_blocks_to_update_transitions[i];
-			VoxelMeshBlockVLT *block = mesh_map.get_block(tu.block_position);
-			// Can be null if there is actually no surface at this location
-			if (block == nullptr) {
-				/*
+		{
+			ZN_PROFILE_SCOPE_NAMED("Update transition mesh blocks");
+			while (lod.mesh_blocks_to_update_transitions.size() > 0) {
+				const VoxelLodTerrainUpdateData::TransitionUpdate tu = lod.mesh_blocks_to_update_transitions.back();
+				lod.mesh_blocks_to_update_transitions.pop_back();
+				VoxelMeshBlockVLT *block = mesh_map.get_block(tu.block_position);
+				// Can be null if there is actually no surface at this location
+				if (block == nullptr) {
+					/*
 #ifdef DEBUG_ENABLED
-				// If the block was removed for a different reason then it is unexpected
-				ERR_CONTINUE(debug_removed_blocks.find(tu.block_position) == debug_removed_blocks.end());
+					// If the block was removed for a different reason then it is unexpected
+					ERR_CONTINUE(debug_removed_blocks.find(tu.block_position) == debug_removed_blocks.end());
 #endif
-				ZN_PRINT_VERBOSE(String("Skipping TransitionUpdate at {0} lod {1}, block not found")
-									  .format(varray(tu.block_position, lod_index)));
-				*/
-				continue;
-			}
-			// CRASH_COND(block == nullptr);
-			if (block->visual_active) {
-				Ref<ShaderMaterial> shader_material = block->get_shader_material();
+					ZN_PRINT_VERBOSE(String("Skipping TransitionUpdate at {0} lod {1}, block not found")
+										  .format(varray(tu.block_position, lod_index)));
+					*/
+					if (postpone_if_time_budget_exceeded(ctx)) {
+						return false;
+					}
+					continue;
+				}
+				// CRASH_COND(block == nullptr);
+				if (block->visual_active) {
+					Ref<ShaderMaterial> shader_material = block->get_shader_material();
 
 				// TODO Don't fade if the transition mask actually didnt change
 				// This can happen if multiple updates occur and then cancel out
@@ -1643,12 +1789,13 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 					}
 				}
 
-				block->set_transition_mask(tu.transition_mask);
+					block->set_transition_mask(tu.transition_mask);
+				}
+				if (postpone_if_time_budget_exceeded(ctx)) {
+					return false;
+				}
 			}
 		}
-
-		lod.mesh_blocks_to_unload.clear();
-		lod.mesh_blocks_to_update_transitions.clear();
 
 	} // for each lod
 
@@ -1680,6 +1827,7 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 	_stats.time_io_requests = state.stats.time_io_requests;
 	_stats.time_mesh_requests = state.stats.time_mesh_requests;
 	_stats.time_update_task = state.stats.time_total;
+	return true;
 }
 
 void VoxelLodTerrain::apply_data_block_response(VoxelEngine::BlockDataOutput &ob) {
@@ -1744,12 +1892,6 @@ void VoxelLodTerrain::apply_data_block_response(VoxelEngine::BlockDataOutput &ob
 		}
 		if (!was_loading) {
 			// That block was not requested, or is no longer needed. drop it...
-			ZN_PRINT_VERBOSE(
-					format("Ignoring block {} lod {}, it was not in loading blocks (terrain {})",
-						   ob.position,
-						   static_cast<int>(ob.lod_index),
-						   this)
-			);
 			++_stats.dropped_block_loads;
 			return;
 		}

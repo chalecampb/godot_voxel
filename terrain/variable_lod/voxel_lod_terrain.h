@@ -6,6 +6,7 @@
 #include "../../storage/voxel_data.h"
 #include "../../util/containers/std_map.h"
 #include "../../util/containers/std_unordered_map.h"
+#include "../../util/containers/std_unordered_set.h"
 #include "../../util/containers/std_vector.h"
 #include "../voxel_mesh_map.h"
 #include "../voxel_node.h"
@@ -305,7 +306,7 @@ protected:
 private:
 	void process(float delta);
 	void apply_quick_reloading_blocks();
-	void apply_main_thread_update_tasks();
+	bool apply_main_thread_update_tasks(TimeSpreadTaskContext &ctx);
 
 	void apply_mesh_update(VoxelEngine::BlockMeshOutput &ob);
 	void apply_data_block_response(VoxelEngine::BlockDataOutput &ob);
@@ -445,6 +446,17 @@ private:
 		VoxelLodTerrain *self = nullptr;
 		VoxelEngine::BlockMeshOutput data;
 	};
+
+	struct ApplyMainThreadUpdateTask : public ITimeSpreadTask {
+		void run(TimeSpreadTaskContext &ctx) override;
+
+		VolumeID volume_id;
+		VoxelLodTerrain *self = nullptr;
+	};
+
+	bool _main_thread_update_task_pending = false;
+	FixedArray<StdUnorderedSet<const VoxelMeshBlockVLT *>, constants::MAX_LOD>
+			_main_thread_update_activated_visual_blocks;
 
 	FixedArray<StdUnorderedMap<Vector3i, RefCount>, constants::MAX_LOD> _queued_main_thread_mesh_updates;
 

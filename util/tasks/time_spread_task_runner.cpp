@@ -6,6 +6,13 @@
 
 namespace zylann {
 
+bool TimeSpreadTaskContext::is_time_budget_exceeded() const {
+	if (time_budget_usec == 0) {
+		return false;
+	}
+	return Time::get_singleton()->get_ticks_usec() - time_before_usec >= time_budget_usec;
+}
+
 TimeSpreadTaskRunner::~TimeSpreadTaskRunner() {
 	flush();
 }
@@ -56,6 +63,8 @@ void TimeSpreadTaskRunner::process(uint64_t time_budget_usec) {
 		}
 
 		TimeSpreadTaskContext ctx;
+		ctx.time_before_usec = time_before;
+		ctx.time_budget_usec = time_budget_usec;
 		task->run(ctx);
 
 		if (ctx.postpone) {

@@ -217,6 +217,14 @@ struct VoxelLodTerrainUpdateData {
 		StdVector<Vector3i> mesh_blocks_to_drop_visual;
 		StdVector<Vector3i> mesh_blocks_to_drop_collision;
 
+		bool has_main_thread_update_work() const {
+			return quick_reloading_blocks.size() > 0 || mesh_blocks_to_activate_visuals.size() > 0 ||
+					mesh_blocks_to_deactivate_visuals.size() > 0 || mesh_blocks_to_activate_collision.size() > 0 ||
+					mesh_blocks_to_deactivate_collision.size() > 0 || mesh_blocks_to_drop_visual.size() > 0 ||
+					mesh_blocks_to_drop_collision.size() > 0 || mesh_blocks_to_unload.size() > 0 ||
+					mesh_blocks_to_update_transitions.size() > 0;
+		}
+
 		inline bool has_loading_block(const Vector3i &pos) const {
 			return loading_blocks.find(pos) != loading_blocks.end();
 		}

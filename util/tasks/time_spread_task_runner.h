@@ -14,6 +14,11 @@ struct TimeSpreadTaskContext {
 	// it will be re-scheduled to run again, the next time the runner is processed.
 	// Otherwise, the task will be destroyed after it runs.
 	bool postpone = false;
+
+	uint64_t time_before_usec = 0;
+	uint64_t time_budget_usec = 0;
+
+	bool is_time_budget_exceeded() const;
 };
 
 class ITimeSpreadTask {
