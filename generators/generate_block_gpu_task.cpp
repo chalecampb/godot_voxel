@@ -118,16 +118,15 @@ void GenerateBlockGPUTask::prepare(GPUTaskContext &ctx) {
 	// Not sure what a pipeline is required for in compute shaders, it seems to be required "just because"
 
 	const RID generator_shader_rid = generator_shader->get_rid();
-	_generator_pipeline_rid = rd.compute_pipeline_create(generator_shader_rid);
-	ERR_FAIL_COND(!_generator_pipeline_rid.is_valid());
+	const RID generator_pipeline_rid = ctx.pipeline_cache.get_or_create(rd, generator_shader_rid);
+	ERR_FAIL_COND(!generator_pipeline_rid.is_valid());
 
 #ifdef VOXEL_ENABLE_MODIFIERS
 	for (const VoxelModifier::ShaderData &modifier : modifiers) {
 		const RID modifier_shader_rid = VoxelModifier::get_block_shader(ctx.base_resources, modifier.modifier_type);
 		ERR_FAIL_COND(!modifier_shader_rid.is_valid());
-		const RID rid = rd.compute_pipeline_create(modifier_shader_rid);
-		ERR_FAIL_COND(!rid.is_valid());
-		_modifier_pipelines.push_back(rid);
+		const RID modifier_pipeline_rid = ctx.pipeline_cache.get_or_create(rd, modifier_shader_rid);
+		ERR_FAIL_COND(!modifier_pipeline_rid.is_valid());
 	}
 #endif
 
@@ -168,7 +167,7 @@ void GenerateBlockGPUTask::prepare(GPUTaskContext &ctx) {
 
 		{
 			ZN_PROFILE_SCOPE_NAMED("compute_list_bind_compute_pipeline");
-			rd.compute_list_bind_compute_pipeline(compute_list_id, _generator_pipeline_rid);
+			rd.compute_list_bind_compute_pipeline(compute_list_id, generator_pipeline_rid);
 		}
 		{
 			ZN_PROFILE_SCOPE_NAMED("compute_list_bind_uniform_set");
@@ -226,7 +225,7 @@ void GenerateBlockGPUTask::prepare(GPUTaskContext &ctx) {
 						zylann::godot::uniform_set_create(rd, modifier_uniforms, modifier_shader_rid, 0);
 				_uniform_sets_to_free.push_back(modifier_uniform_set);
 
-				const RID pipeline_rid = _modifier_pipelines[modifier_index];
+				const RID pipeline_rid = ctx.pipeline_cache.get_or_create(rd, modifier_shader_rid);
 				rd.compute_list_bind_compute_pipeline(compute_list_id, pipeline_rid);
 				rd.compute_list_bind_uniform_set(compute_list_id, modifier_uniform_set, 0);
 
@@ -472,12 +471,6 @@ void GenerateBlockGPUTask::collect(GPUTaskContext &ctx) {
 		box_offset += size_per_output * generator_shader_outputs->outputs.size();
 
 		storage_buffer_pool.recycle(bd.params_sb);
-	}
-
-	zylann::godot::free_rendering_device_rid(rd, _generator_pipeline_rid);
-
-	for (const RID &rid : _modifier_pipelines) {
-		zylann::godot::free_rendering_device_rid(rd, rid);
 	}
 
 	for (const RID &rid : _uniform_sets_to_free) {

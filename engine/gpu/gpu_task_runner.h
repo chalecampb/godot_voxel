@@ -40,10 +40,25 @@ struct BaseGPUResources {
 	void clear(RenderingDevice &rd);
 };
 
+class GPUComputePipelineCache {
+public:
+	RID get_or_create(RenderingDevice &rd, RID shader_rid);
+	void clear(RenderingDevice &rd);
+
+private:
+	struct Entry {
+		RID shader_rid;
+		RID pipeline_rid;
+	};
+
+	StdVector<Entry> _entries;
+};
+
 struct GPUTaskContext {
 	RenderingDevice &rendering_device;
 	GPUStorageBufferPool &storage_buffer_pool;
 	const BaseGPUResources &base_resources;
+	GPUComputePipelineCache &pipeline_cache;
 
 	// Buffer shared by multiple tasks in the current batch.
 	// It will be downloaded in one go before collection, which is faster than downloading multiple individual buffers,
@@ -53,8 +68,16 @@ struct GPUTaskContext {
 	RID shared_output_buffer_rid;
 	PackedByteArray downloaded_shared_output_data;
 
-	GPUTaskContext(RenderingDevice &rd, GPUStorageBufferPool &sb_pool, const BaseGPUResources &br) :
-			rendering_device(rd), storage_buffer_pool(sb_pool), base_resources(br) {}
+	GPUTaskContext(
+			RenderingDevice &rd,
+			GPUStorageBufferPool &sb_pool,
+			const BaseGPUResources &br,
+			GPUComputePipelineCache &p_pipeline_cache
+	) :
+			rendering_device(rd),
+			storage_buffer_pool(sb_pool),
+			base_resources(br),
+			pipeline_cache(p_pipeline_cache) {}
 };
 
 class IGPUTask {
@@ -75,6 +98,11 @@ public:
 	GPUTaskRunner();
 	~GPUTaskRunner();
 
+	struct Config {
+		unsigned int max_in_flight_batches = 1;
+	};
+
+	void set_config(Config config);
 	void start();
 	void stop();
 	void push(IGPUTask *task);
@@ -89,6 +117,8 @@ private:
 
 	GPUStorageBufferPool _storage_buffer_pool;
 	BaseGPUResources _base_resources;
+	GPUComputePipelineCache _pipeline_cache;
+	Config _config;
 
 	// Queue of tasks to run. They will be run in the order they were submitted.
 	StdVector<IGPUTask *> _shared_tasks;

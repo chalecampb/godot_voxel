@@ -24,6 +24,11 @@ GPUTaskRunner::~GPUTaskRunner() {
 	}
 }
 
+void GPUTaskRunner::set_config(Config config) {
+	_config = config;
+	_config.max_in_flight_batches = math::clamp(_config.max_in_flight_batches, 1u, 4u);
+}
+
 void GPUTaskRunner::start() {
 	ZN_ASSERT(!_running);
 	ZN_PRINT_VERBOSE("Starting GPUTaskRunner");
@@ -68,6 +73,62 @@ unsigned int GPUTaskRunner::get_pending_task_count() const {
 // 	return _rendering_device;
 // }
 
+RID GPUComputePipelineCache::get_or_create(RenderingDevice &rd, RID shader_rid) {
+	for (const Entry &entry : _entries) {
+		if (entry.shader_rid == shader_rid) {
+			return entry.pipeline_rid;
+		}
+	}
+
+	const RID pipeline_rid = rd.compute_pipeline_create(shader_rid);
+	ERR_FAIL_COND_V(!pipeline_rid.is_valid(), RID());
+
+	_entries.push_back(Entry{ shader_rid, pipeline_rid });
+	return pipeline_rid;
+}
+
+void GPUComputePipelineCache::clear(RenderingDevice &rd) {
+	for (const Entry &entry : _entries) {
+		godot::free_rendering_device_rid(rd, entry.pipeline_rid);
+	}
+	_entries.clear();
+}
+
+namespace {
+
+size_t find_gpu_batch_end(
+		Span<IGPUTask *> tasks,
+		size_t begin_index,
+		uint64_t shared_memory_limit,
+		unsigned int fallback_task_limit,
+		unsigned int batch_budget_multiplier
+) {
+	const uint64_t output_budget_bytes =
+			math::max<uint64_t>(1, shared_memory_limit) * 1024 * math::max(batch_budget_multiplier, 1u);
+	const unsigned int task_limit = fallback_task_limit * math::max(batch_budget_multiplier, 1u);
+
+	uint64_t output_bytes = 0;
+	size_t end_index = begin_index;
+
+	for (; end_index < tasks.size(); ++end_index) {
+		IGPUTask *task = tasks[end_index];
+		const uint64_t task_output_bytes = task->get_required_shared_output_buffer_size();
+
+		if (
+				end_index > begin_index &&
+				(end_index - begin_index >= task_limit || output_bytes + task_output_bytes > output_budget_bytes)
+		) {
+			break;
+		}
+
+		output_bytes += task_output_bytes;
+	}
+
+	return math::max(begin_index + 1, end_index);
+}
+
+} // namespace
+
 void GPUTaskRunner::thread_func() {
 	ZN_PROFILE_SET_THREAD_NAME("Voxel GPU tasks");
 	ZN_DSTACK();
@@ -88,6 +149,8 @@ void GPUTaskRunner::thread_func() {
 
 	_storage_buffer_pool.set_rendering_device(_rendering_device);
 	_base_resources.load(*_rendering_device);
+	const uint64_t shared_memory_limit =
+			_rendering_device->limit_get(RenderingDevice::LIMIT_MAX_COMPUTE_SHARED_MEMORY_SIZE);
 
 	StdVector<IGPUTask *> tasks;
 
@@ -107,7 +170,7 @@ void GPUTaskRunner::thread_func() {
 	// It's also unclear how much to execute per frame.
 	// 4 tasks was good enough on an nVidia 1060 for detail rendering, but for tasks with different costs it might need
 	// different quota to prevent rendering slowdowns...
-	const unsigned int batch_count = 16;
+	const unsigned int fallback_batch_count = 16;
 
 	while (_running) {
 		{
@@ -120,12 +183,18 @@ void GPUTaskRunner::thread_func() {
 		}
 
 		ZN_ASSERT(_rendering_device != nullptr);
-		GPUTaskContext ctx(*_rendering_device, _storage_buffer_pool, _base_resources);
+		GPUTaskContext ctx(*_rendering_device, _storage_buffer_pool, _base_resources, _pipeline_cache);
 
-		for (size_t begin_index = 0; begin_index < tasks.size(); begin_index += batch_count) {
+		for (size_t begin_index = 0; begin_index < tasks.size();) {
 			ZN_PROFILE_SCOPE_NAMED("Batch");
 
-			const size_t end_index = math::min(begin_index + batch_count, tasks.size());
+			const size_t end_index = find_gpu_batch_end(
+					to_span(tasks),
+					begin_index,
+					shared_memory_limit,
+					fallback_batch_count,
+					_config.max_in_flight_batches
+			);
 
 			unsigned int required_shared_output_buffer_size = 0;
 			shared_output_storage_buffer_segments.clear();
@@ -201,6 +270,8 @@ void GPUTaskRunner::thread_func() {
 			}
 
 			ctx.downloaded_shared_output_data = PackedByteArray();
+
+			begin_index = end_index;
 		}
 
 		tasks.clear();
@@ -221,6 +292,7 @@ void GPUTaskRunner::thread_func() {
 		}
 	}
 
+	_pipeline_cache.clear(*_rendering_device);
 	_base_resources.clear(*_rendering_device);
 
 	if (is_verbose_output_enabled()) {

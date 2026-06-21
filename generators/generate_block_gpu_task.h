@@ -87,8 +87,6 @@ private:
 	};
 
 	StdVector<BoxData> _boxes_data;
-	RID _generator_pipeline_rid;
-	StdVector<RID> _modifier_pipelines;
 	StdVector<RID> _uniform_sets_to_free;
 };
 
