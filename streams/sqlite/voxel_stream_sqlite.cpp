@@ -48,6 +48,14 @@ bool validate_range(Vector3i pos, unsigned int lod_index, const Box3i coordinate
 	return true;
 }
 
+bool load_block_keys_to_cache(sqlite::Connection &con, BlockKeysCache &cache) {
+	RWLockWrite wlock(cache.rw_lock);
+	return con.load_all_block_keys(&cache, [](void *ctx, BlockLocation loc) {
+		BlockKeysCache *cache = static_cast<BlockKeysCache *>(ctx);
+		cache->add_no_lock(loc.position, loc.lod);
+	});
+}
+
 } // namespace
 
 VoxelStreamSQLite::VoxelStreamSQLite() {}
@@ -555,11 +563,7 @@ VoxelStreamSQLite::ConnectionResult VoxelStreamSQLite::get_connection() {
 		return { nullptr, ConnectionResult::ERROR };
 	}
 	if (_block_keys_cache_enabled) {
-		RWLockWrite wlock(_block_keys_cache.rw_lock);
-		con->load_all_block_keys(&_block_keys_cache, [](void *ctx, BlockLocation loc) {
-			BlockKeysCache *cache = static_cast<BlockKeysCache *>(ctx);
-			cache->add_no_lock(loc.position, loc.lod);
-		});
+		load_block_keys_to_cache(*con, _block_keys_cache);
 	}
 	return { con, ConnectionResult::SUCCESS };
 }
@@ -578,11 +582,43 @@ void VoxelStreamSQLite::recycle_connection(sqlite::Connection *con) {
 }
 
 void VoxelStreamSQLite::set_key_cache_enabled(bool enable) {
-	_block_keys_cache_enabled = enable;
+	if (_block_keys_cache_enabled == enable) {
+		return;
+	}
+	if (enable) {
+		flush_cache();
+		_block_keys_cache_enabled = true;
+		rebuild_key_cache();
+	} else {
+		_block_keys_cache_enabled = false;
+		_block_keys_cache.clear();
+	}
 }
 
 bool VoxelStreamSQLite::is_key_cache_enabled() const {
 	return _block_keys_cache_enabled;
+}
+
+void VoxelStreamSQLite::rebuild_key_cache() {
+	_block_keys_cache.clear();
+
+	StdString fpath;
+	CoordinateFormat preferred_coordinate_format;
+	{
+		MutexLock mlock(_connection_mutex);
+		if (_globalized_connection_path.empty()) {
+			return;
+		}
+		fpath = _globalized_connection_path;
+		preferred_coordinate_format = _preferred_coordinate_format;
+	}
+
+	sqlite::Connection con;
+	if (!con.open(fpath.data(), to_internal_coordinate_format(preferred_coordinate_format))) {
+		return;
+	}
+
+	load_block_keys_to_cache(con, _block_keys_cache);
 }
 
 Box3i VoxelStreamSQLite::get_supported_block_range() const {
@@ -690,6 +726,10 @@ void VoxelStreamSQLite::_bind_methods() {
 
 	ADD_PROPERTY(
 			PropertyInfo(Variant::STRING, "database_path", PROPERTY_HINT_FILE), "set_database_path", "get_database_path"
+	);
+
+	ADD_PROPERTY(
+			PropertyInfo(Variant::BOOL, "key_cache_enabled"), "set_key_cache_enabled", "is_key_cache_enabled"
 	);
 
 	ADD_PROPERTY(
