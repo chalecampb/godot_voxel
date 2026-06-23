@@ -4,6 +4,8 @@
 namespace zylann::voxel::tests {
 
 void test_transvoxel_issue772();
+void test_transvoxel_multimaterial_uses_visible_materials();
+void test_transvoxel_multimaterial_exposes_deeper_material_after_dig();
 
 } // namespace zylann::voxel::tests
 

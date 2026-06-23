@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VoxelMesherTransvoxelMultiMaterial" inherits="VoxelMesher" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Implements smooth SDF meshing with one mesh surface per voxel material index.
+	</brief_description>
+	<description>
+		Uses the Transvoxel algorithm to polygonize [constant VoxelBuffer.CHANNEL_SDF], while using 8-bit values from [constant VoxelBuffer.CHANNEL_INDICES] to split visible geometry into independent surfaces. Materials are looked up from [member library] by surface material index.
+		This mesher is intended for the same data layout as [constant VoxelMesherTransvoxel.TEXTURES_SINGLE_S4]. It does not expose Mixel4, atlas, or triplanar texturing.
+		When using LOD, shaders assigned through the material library must include the Transvoxel vertex-position logic used by smooth voxel terrain.
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="edge_clamp_margin" type="float" setter="set_edge_clamp_margin" getter="get_edge_clamp_margin" default="0.02">
+			Minimum interpolation margin from cell corners when placing generated vertices. Increasing this can reduce very thin triangles at the cost of small surface shape changes.
+		</member>
+		<member name="library" type="VoxelSdfMaterialLibrary" setter="set_library" getter="get_library">
+			Material library used to resolve mesh surface material indices.
+		</member>
+		<member name="textures_ignore_air_voxels" type="bool" setter="set_textures_ignore_air_voxels" getter="get_textures_ignore_air_voxels" default="false">
+			If enabled, material IDs stored on air voxels are ignored when deciding which material owns visible SDF surface geometry.
+		</member>
+		<member name="transitions_enabled" type="bool" setter="set_transitions_enabled" getter="get_transitions_enabled" default="true">
+			If enabled, generates Transvoxel transition surfaces for LOD seams.
+		</member>
+		<member name="uv_scale" type="float" setter="set_uv_scale" getter="get_uv_scale" default="1.0">
+			Scale used for generated planar UVs.
+		</member>
+	</members>
+</class>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="VoxelSdfMaterialLibrary" inherits="Resource" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../doc/class.xsd">
+	<brief_description>
+		Indexed material library for multi-material SDF meshing.
+	</brief_description>
+	<description>
+		Stores materials by voxel material index. Entry [code]materials[N][/code] is used for mesh surfaces emitted with material index [code]N[/code].
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="get_material_by_index" qualifiers="const">
+			<return type="Material" />
+			<param index="0" name="index" type="int" />
+			<description>
+				Returns the material at [param index], or [code]null[/code] if the index is outside [member materials].
+			</description>
+		</method>
+		<method name="get_material_index_count" qualifiers="const">
+			<return type="int" />
+			<description>
+				Returns the number of material slots in [member materials].
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="materials" type="Material[]" setter="set_materials" getter="get_materials" default="[]">
+			Material array indexed directly by voxel material ID.
+		</member>
+	</members>
+</class>

@@ -169,6 +169,8 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_voxel_graph_constant_reduction);
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
 	VOXEL_TEST(test_transvoxel_issue772);
+	VOXEL_TEST(test_transvoxel_multimaterial_uses_visible_materials);
+	VOXEL_TEST(test_transvoxel_multimaterial_exposes_deeper_material_after_dig);
 #endif
 #ifdef VOXEL_ENABLE_INSTANCER
 	VOXEL_TEST(test_instance_generator_material_filter_issue774);

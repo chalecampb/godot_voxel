@@ -53,7 +53,9 @@
 #include "util/tasks/godot/threaded_task_gd.h"
 
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
+#include "meshers/transvoxel/voxel_mesher_transvoxel_multimaterial.h"
 #include "meshers/transvoxel/voxel_mesher_transvoxel.h"
+#include "meshers/transvoxel/voxel_sdf_material_library.h"
 #endif
 
 #ifdef VOXEL_ENABLE_MODIFIERS
@@ -330,7 +332,9 @@ void initialize_voxel_module(ModuleInitializationLevel p_level) {
 #endif
 
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
+		ClassDB::register_class<VoxelSdfMaterialLibrary>();
 		ClassDB::register_class<VoxelMesherTransvoxel>();
+		ClassDB::register_class<VoxelMesherTransvoxelMultiMaterial>();
 #endif
 
 #ifdef VOXEL_ENABLE_MODIFIERS
