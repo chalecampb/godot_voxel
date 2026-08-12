@@ -143,6 +143,9 @@ bool ProgramGraph::is_valid_connection(PortLocation src, PortLocation dst) const
 }
 
 bool ProgramGraph::can_connect(PortLocation src, PortLocation dst) const {
+	if (!is_output_port_valid(src) || !is_input_port_valid(dst)) {
+		return false;
+	}
 	if (is_connected(src, dst)) {
 		// Already exists
 		return false;
@@ -156,13 +159,13 @@ bool ProgramGraph::can_connect(PortLocation src, PortLocation dst) const {
 }
 
 void ProgramGraph::connect(PortLocation src, PortLocation dst) {
-	ZN_ASSERT_RETURN_MSG(!is_connected(src, dst), "Cannot create the same connection twice.");
-	ZN_ASSERT_RETURN_MSG(src.node_id != dst.node_id, "Cannot connect a node to itself.");
-	ZN_ASSERT_RETURN_MSG(!has_path(dst.node_id, src.node_id), "Cannot add connection that would create a cycle.");
 	Node &src_node = get_node(src.node_id);
 	Node &dst_node = get_node(dst.node_id);
 	ZN_ASSERT_RETURN_MSG(src.port_index < src_node.outputs.size(), "Source port doesn't exist");
 	ZN_ASSERT_RETURN_MSG(dst.port_index < dst_node.inputs.size(), "Destination port doesn't exist");
+	ZN_ASSERT_RETURN_MSG(!is_connected(src, dst), "Cannot create the same connection twice.");
+	ZN_ASSERT_RETURN_MSG(src.node_id != dst.node_id, "Cannot connect a node to itself.");
+	ZN_ASSERT_RETURN_MSG(!has_path(dst.node_id, src.node_id), "Cannot add connection that would create a cycle.");
 	ZN_ASSERT_RETURN_MSG(
 			dst_node.inputs[dst.port_index].connections.size() == 0, "Destination node's port is already connected"
 	);

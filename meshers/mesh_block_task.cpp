@@ -378,6 +378,21 @@ void MeshBlockTask::gather_voxels_gpu(zylann::ThreadedTaskContext &ctx) {
 	const unsigned int min_padding = mesher->get_minimum_padding();
 	const unsigned int max_padding = mesher->get_maximum_padding();
 
+	Ref<VoxelGenerator> generator = meshing_dependency->generator;
+	ERR_FAIL_COND(generator.is_null());
+
+	std::shared_ptr<ComputeShader> generator_shader = generator->get_block_rendering_shader();
+	ERR_FAIL_COND(generator_shader == nullptr);
+	if (!generator_shader->is_compilation_complete()) {
+		ctx.status = ThreadedTaskContext::STATUS_POSTPONED;
+		return;
+	}
+	if (!generator_shader->is_compilation_successful()) {
+		gather_voxels_cpu();
+		_stage = 2;
+		return;
+	}
+
 	StdVector<Box3i> boxes_to_generate;
 	Vector3i origin_in_voxels;
 
@@ -400,17 +415,11 @@ void MeshBlockTask::gather_voxels_gpu(zylann::ThreadedTaskContext &ctx) {
 		return;
 	}
 
-	Ref<VoxelGenerator> generator = meshing_dependency->generator;
-	ERR_FAIL_COND(generator.is_null());
-
 	VoxelGenerator::VoxelQueryData generator_query{ _voxels, origin_in_voxels, lod_index };
 	if (generator->generate_broad_block(generator_query)) {
 		_stage = 2;
 		return;
 	}
-
-	std::shared_ptr<ComputeShader> generator_shader = generator->get_block_rendering_shader();
-	ERR_FAIL_COND(generator_shader == nullptr);
 
 	GenerateBlockGPUTask *gpu_task = ZN_NEW(GenerateBlockGPUTask);
 	gpu_task->boxes_to_generate = std::move(boxes_to_generate);

@@ -23,6 +23,7 @@
 #include "../../util/godot/classes/shader.h"
 #include "../../util/godot/classes/viewport.h"
 #include "../../util/godot/core/array.h"
+#include "../../util/godot/core/callable_mp.h"
 #include "../../util/godot/core/string.h"
 #include "../../util/math/color.h"
 #include "../../util/math/conv.h"
@@ -310,20 +311,6 @@ void VoxelLodTerrain::set_stream(Ref<VoxelStream> p_stream) {
 
 	StreamingDependency::reset(_streaming_dependency, p_stream, get_generator());
 
-#ifdef TOOLS_ENABLED
-	if (p_stream.is_valid()) {
-		if (Engine::get_singleton()->is_editor_hint()) {
-			Ref<Script> stream_script = p_stream->get_script();
-			if (stream_script.is_valid()) {
-				// Safety check. It's too easy to break threads by making a script reload.
-				// You can turn it back on, but be careful.
-				_update_data->settings.run_stream_in_editor = false;
-				notify_property_list_changed();
-			}
-		}
-	}
-#endif
-
 	_on_stream_params_changed();
 }
 
@@ -336,30 +323,35 @@ void VoxelLodTerrain::set_generator(Ref<VoxelGenerator> p_generator) {
 		return;
 	}
 
+	Ref<VoxelGenerator> prev_generator = get_generator();
+	if (prev_generator.is_valid()) {
+		const Callable callable = callable_mp(this, &VoxelLodTerrain::_on_generator_regeneration_requested);
+		if (prev_generator->is_connected(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable)) {
+			prev_generator->disconnect(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable);
+		}
+	}
+
 	_data->set_generator(p_generator);
 
 	MeshingDependency::reset(_meshing_dependency, _mesher, p_generator);
 	StreamingDependency::reset(_streaming_dependency, get_stream(), p_generator);
 
-#ifdef TOOLS_ENABLED
 	if (p_generator.is_valid()) {
-		if (Engine::get_singleton()->is_editor_hint()) {
-			Ref<Script> generator_script = p_generator->get_script();
-			if (generator_script.is_valid()) {
-				// Safety check. It's too easy to break threads by making a script reload.
-				// You can turn it back on, but be careful.
-				_update_data->settings.run_stream_in_editor = false;
-				notify_property_list_changed();
-			}
+		const Callable callable = callable_mp(this, &VoxelLodTerrain::_on_generator_regeneration_requested);
+		if (!p_generator->is_connected(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable)) {
+			p_generator->connect(VoxelGenerator::SIGNAL_REGENERATION_REQUESTED, callable);
 		}
 	}
-#endif
 
 	_on_stream_params_changed();
 }
 
 Ref<VoxelGenerator> VoxelLodTerrain::get_generator() const {
 	return _data->get_generator();
+}
+
+void VoxelLodTerrain::_on_generator_regeneration_requested() {
+	restart_stream();
 }
 
 void VoxelLodTerrain::_on_gi_mode_changed() {
@@ -456,8 +448,7 @@ void VoxelLodTerrain::_on_stream_params_changed() {
 
 	Ref<VoxelGenerator> generator = get_generator();
 
-	if ((stream.is_valid() || generator.is_valid()) &&
-		(Engine::get_singleton()->is_editor_hint() == false || _update_data->settings.run_stream_in_editor)) {
+	if (((stream.is_valid() && stream->is_runnable()) || (generator.is_valid() && generator->is_runnable()))) {
 		start_streamer();
 		start_updater();
 	}
@@ -1744,12 +1735,6 @@ void VoxelLodTerrain::apply_data_block_response(VoxelEngine::BlockDataOutput &ob
 		}
 		if (!was_loading) {
 			// That block was not requested, or is no longer needed. drop it...
-			ZN_PRINT_VERBOSE(
-					format("Ignoring block {} lod {}, it was not in loading blocks (terrain {})",
-						   ob.position,
-						   static_cast<int>(ob.lod_index),
-						   this)
-			);
 			++_stats.dropped_block_loads;
 			return;
 		}
@@ -2668,29 +2653,6 @@ Dictionary VoxelLodTerrain::_b_get_statistics() const {
 	d["dropped_block_meshs"] = _stats.dropped_block_meshs;
 
 	return d;
-}
-
-void VoxelLodTerrain::set_run_stream_in_editor(bool enable) {
-	if (enable == _update_data->settings.run_stream_in_editor) {
-		return;
-	}
-
-	_update_data->wait_for_end_of_task();
-	_update_data->settings.run_stream_in_editor = enable;
-
-	if (Engine::get_singleton()->is_editor_hint()) {
-		if (enable) {
-			_on_stream_params_changed();
-
-		} else {
-			// This is expected to block the main thread until the streaming thread is done.
-			stop_streamer();
-		}
-	}
-}
-
-bool VoxelLodTerrain::is_stream_running_in_editor() const {
-	return _update_data->settings.run_stream_in_editor;
 }
 
 void VoxelLodTerrain::restart_stream() {
@@ -3899,11 +3861,7 @@ void VoxelLodTerrain::_bind_methods() {
 			D_METHOD("voxel_to_mesh_block_position", "voxel_position", "lod_index"), &Self::voxel_to_mesh_block_position
 	);
 
-	ClassDB::bind_method(D_METHOD("get_voxel_tool"), &Self::get_voxel_tool);
 	ClassDB::bind_method(D_METHOD("save_modified_blocks"), &Self::_b_save_modified_blocks);
-
-	ClassDB::bind_method(D_METHOD("set_run_stream_in_editor"), &Self::set_run_stream_in_editor);
-	ClassDB::bind_method(D_METHOD("is_stream_running_in_editor"), &Self::is_stream_running_in_editor);
 
 	ClassDB::bind_method(D_METHOD("is_area_meshed", "area_in_voxels", "lod_index"), &Self::_b_is_area_meshed);
 
@@ -4115,12 +4073,6 @@ void VoxelLodTerrain::_bind_methods() {
 
 	ADD_GROUP("Advanced", "");
 
-	// TODO Probably should be in parent class?
-	ADD_PROPERTY(
-			PropertyInfo(Variant::BOOL, "run_stream_in_editor"),
-			"set_run_stream_in_editor",
-			"is_stream_running_in_editor"
-	);
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "mesh_block_size"), "set_mesh_block_size", "get_mesh_block_size");
 	ADD_PROPERTY(
 			PropertyInfo(Variant::BOOL, "full_load_mode_enabled"),

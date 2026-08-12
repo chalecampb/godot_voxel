@@ -334,6 +334,7 @@ void VoxelGraphEditor::set_voxel_node(VoxelNode *node) {
 	} else {
 		ZN_PRINT_VERBOSE(format("Reference node for VoxelGraph gizmos: {}", String(node->get_path())));
 		_debug_renderer.set_world(node->get_world_3d().ptr());
+		update_range_analysis_gizmo();
 	}
 }
 
@@ -502,15 +503,20 @@ void VoxelGraphEditor::remove_node_gui(StringName gui_node_name) {
 // 	return nullptr;
 // }
 
-void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
-	ERR_FAIL_COND(_graph.is_null());
+bool VoxelGraphEditor::update_node_layout(uint32_t node_id) {
+	ERR_FAIL_COND_V(_graph.is_null(), false);
 
 	GraphEdit &graph_edit = *_graph_edit;
 	const String view_name = node_to_gui_name(node_id);
+	if (!graph_edit.has_node(view_name)) {
+		return false;
+	}
 	VoxelGraphEditorNode *view = get_node_typed<VoxelGraphEditorNode>(graph_edit, view_name);
-	ERR_FAIL_COND(view == nullptr);
+	if (view == nullptr) {
+		return false;
+	}
 
-	// Remove all GUI connections going to the node
+	// Remove all GUI connections going to or from the node
 
 	StdVector<GraphEditConnection> old_connections;
 	get_graph_edit_connections(graph_edit, old_connections);
@@ -521,17 +527,18 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 		if (to_view == nullptr) {
 			continue;
 		}
-		if (to_view == view) {
+		const NodePath from = to_node_path(con.from);
+		const VoxelGraphEditorNode *from_view = get_node_typed<VoxelGraphEditorNode>(graph_edit, from);
+		if (to_view == view || from_view == view) {
 			graph_edit.disconnect_node(con.from, con.from_port, con.to, con.to_port);
 		}
 	}
 
 	// Update node layout
 
+	view->update_title(**_graph);
 	view->update_layout(**_graph);
-
-	// TODO What about output connections?
-	// Currently assuming there is always only one for expression nodes, therefore it might be ok?
+	view->set_size(view->get_combined_minimum_size());
 
 	// Add connections back by reading the graph
 
@@ -542,7 +549,7 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 	for (size_t i = 0; i < all_connections.size(); ++i) {
 		const ProgramGraph::Connection &con = all_connections[i];
 
-		if (con.dst.node_id == node_id) {
+		if (con.dst.node_id == node_id || con.src.node_id == node_id) {
 			graph_edit.connect_node(
 					node_to_gui_name(con.src.node_id),
 					con.src.port_index,
@@ -551,6 +558,8 @@ void VoxelGraphEditor::update_node_layout(uint32_t node_id) {
 			);
 		}
 	}
+
+	return true;
 }
 
 void VoxelGraphEditor::update_node_comment(uint32_t node_id) {
@@ -1121,10 +1130,8 @@ void VoxelGraphEditor::update_previews(bool with_live_update) {
 		if (hash != _last_output_graph_hash) {
 			_last_output_graph_hash = hash;
 
-			// Not calling into `_voxel_node` directly because the editor could be pinned and the terrain not actually
-			// selected. In this situation the plugin may reset the node to null. But it is desirable for terrains
-			// using the current graph to update if they are in the edited scene, so this may be delegated to the editor
-			// plugin. There isn't enough context from here to do this cleanly.
+			// The editor may be pinned with no terrain selected. The plugin will ask the generator to request
+			// regeneration; terrains using it decide whether and how to restart.
 			emit_signal(SIGNAL_REGENERATE_REQUESTED);
 		}
 	}
@@ -1136,6 +1143,86 @@ void VoxelGraphEditor::update_range_analysis_previews() {
 	ERR_FAIL_COND(!adapter.is_good());
 
 	const AABB aabb = _range_analysis_dialog->get_aabb();
+
+	// Compute actual ranges at outputs connected to preview nodes
+	StdUnorderedMap<uint32_t, math::Interval> actual_ranges;
+	{
+		StdVector<VoxelGraphEditorNodePreviewInfo> slice_preview_infos = get_slice_previews();
+
+		const Vector3i min_pos = to_vec3i(math::floor(aabb.position));
+		const Vector3i max_pos = to_vec3i(math::ceil(aabb.position + aabb.size));
+		const Vector3i res = max_pos - min_pos;
+		const uint64_t volume64 = Vector3iUtil::get_volume_u64(res);
+		const uint64_t max_volume = 256 * 256 * 256;
+
+		if (volume64 < max_volume) {
+			const uint32_t volume = static_cast<uint32_t>(volume64);
+			const uint32_t chunk_size = 256;
+			const uint32_t num_chunks = math::ceildiv(volume, chunk_size);
+			ZN_ASSERT_RETURN(num_chunks > 0);
+
+			StdVector<float> x_vec;
+			StdVector<float> y_vec;
+			StdVector<float> z_vec;
+
+			ZN_ASSERT_RETURN((num_chunks * chunk_size) >= volume);
+			const uint32_t last_chunk_size = (num_chunks * chunk_size) == volume ? chunk_size : volume % chunk_size;
+			const uint32_t last_chunk_index = num_chunks - 1;
+
+			Vector3i voxel_pos = min_pos;
+
+			for (uint32_t chunk_index = 0; chunk_index < num_chunks; ++chunk_index) {
+				const uint32_t rel_size = chunk_index < last_chunk_index ? chunk_size : last_chunk_size;
+
+				x_vec.resize(rel_size);
+				y_vec.resize(rel_size);
+				z_vec.resize(rel_size);
+
+				for (unsigned int rel_index = 0; rel_index < rel_size; ++rel_index) {
+					++voxel_pos.x;
+					if (voxel_pos.x == max_pos.x) {
+						voxel_pos.x = min_pos.x;
+						++voxel_pos.y;
+						if (voxel_pos.y == max_pos.y) {
+							voxel_pos.y = min_pos.y;
+							++voxel_pos.z;
+						}
+					}
+
+					x_vec[rel_index] = voxel_pos.x;
+					y_vec[rel_index] = voxel_pos.y;
+					z_vec[rel_index] = voxel_pos.z;
+				}
+
+				{
+					Span<float> x_coords = to_span(x_vec);
+					Span<float> y_coords = to_span(y_vec);
+					Span<float> z_coords = to_span(z_vec);
+
+					adapter.generate_set(x_coords, y_coords, z_coords);
+				}
+
+				const pg::Runtime::State &last_state = adapter.get_last_state_from_current_thread();
+
+				for (const VoxelGraphEditorNodePreviewInfo &info : slice_preview_infos) {
+					const pg::Runtime::Buffer &buffer = last_state.get_buffer(info.address);
+
+					ZN_ASSERT_CONTINUE(buffer.data != nullptr);
+					Span<const float> buffer_s(buffer.data, buffer.size);
+					ZN_ASSERT_CONTINUE(buffer_s.size() > 0);
+
+					math::Interval range = math::Interval::from_single_value(buffer_s[0]);
+					for (const float v : buffer_s) {
+						range.add_point(v);
+					}
+
+					math::Interval &accum_range = actual_ranges[info.address];
+					accum_range.add_interval(range);
+				}
+			}
+		}
+	}
+
 	adapter.debug_analyze_range(math::floor_to_int(aabb.position), math::floor_to_int(aabb.position + aabb.size));
 
 	const pg::Runtime::State &state = adapter.get_last_state_from_current_thread();
@@ -1156,7 +1243,7 @@ void VoxelGraphEditor::update_range_analysis_previews() {
 		// TODO Would be nice if GraphEdit's minimap would take such coloring into account...
 		node_view->set_modulate(greyed_out_color);
 
-		node_view->update_range_analysis_tooltips(adapter, state);
+		node_view->update_range_analysis_tooltips(adapter, state, actual_ranges);
 	}
 
 	// Highlight only nodes that will actually run.
@@ -1201,9 +1288,9 @@ void VoxelGraphEditor::update_range_analysis_gizmo() {
 	_debug_renderer.end();
 }
 
-void VoxelGraphEditor::update_slice_previews() {
+StdVector<VoxelGraphEditorNodePreviewInfo> VoxelGraphEditor::get_slice_previews() const {
 	GraphEditorAdapter adapter(_generator, _graph);
-	StdVector<VoxelGraphEditorNodePreview::PreviewInfo> previews;
+	StdVector<VoxelGraphEditorNodePreviewInfo> previews;
 
 	// Gather preview nodes
 	for (int i = 0; i < _graph_edit->get_child_count(); ++i) {
@@ -1219,7 +1306,7 @@ void VoxelGraphEditor::update_slice_previews() {
 			// Not connected?
 			continue;
 		}
-		VoxelGraphEditorNodePreview::PreviewInfo info;
+		VoxelGraphEditorNodePreviewInfo info;
 		info.control = node->get_preview();
 		if (!adapter.try_get_output_port_address(src, info.address)) {
 			// Not part of the compiled result
@@ -1229,6 +1316,12 @@ void VoxelGraphEditor::update_slice_previews() {
 		previews.push_back(info);
 	}
 
+	return previews;
+}
+
+void VoxelGraphEditor::update_slice_previews() {
+	StdVector<VoxelGraphEditorNodePreviewInfo> previews = get_slice_previews();
+	GraphEditorAdapter adapter(_generator, _graph);
 	VoxelGraphEditorNodePreview::update_previews(
 			adapter, to_span(previews), _node_preview_mode, _preview_scale, _preview_offset
 	);
@@ -1250,6 +1343,16 @@ void VoxelGraphEditor::schedule_preview_update() {
 
 void VoxelGraphEditor::_on_graph_changed() {
 	schedule_preview_update();
+	if (_graph.is_valid() && _graph_edit != nullptr) {
+		PackedInt32Array node_ids = _graph->get_node_ids();
+		for (int i = 0; i < node_ids.size(); ++i) {
+			const uint32_t node_id = node_ids[i];
+			const NodeType &node_type = NodeTypeDB::get_singleton().get_type(_graph->get_node_type_id(node_id));
+			if (node_type.update_node_layout_func != nullptr) {
+				update_node_layout(node_id);
+			}
+		}
+	}
 }
 
 void VoxelGraphEditor::_on_graph_node_name_changed(int node_id) {

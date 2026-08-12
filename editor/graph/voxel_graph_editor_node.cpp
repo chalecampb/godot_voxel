@@ -1,6 +1,7 @@
 #include "voxel_graph_editor_node.h"
 #include "../../generators/graph/node_type_db.h"
 #include "../../generators/graph/voxel_generator_graph.h"
+#include "../../generators/graph/voxel_graph_script_node.h"
 #include "../../util/godot/classes/h_box_container.h"
 #include "../../util/godot/classes/label.h"
 #include "../../util/godot/classes/node.h"
@@ -237,7 +238,17 @@ void VoxelGraphEditorNode::update_title(const VoxelGraphFunction &graph, uint32_
 		}
 
 	} else if (zylann::godot::is_empty(node_name)) {
-		set_title(type.name);
+		if (type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			Ref<VoxelGraphScriptNode> script_node = graph.get_node_param(node_id, 0);
+			const String script_name = script_node.is_valid() ? script_node->get_script_path().get_file().get_basename() : String();
+			if (zylann::godot::is_empty(script_name)) {
+				set_title(type.name);
+			} else {
+				set_title(String("{0} ({1})").format(varray(type.name, script_name)));
+			}
+		} else {
+			set_title(type.name);
+		}
 
 	} else if (type_id == VoxelGraphFunction::NODE_COMMENT) {
 		set_title(String(node_name));
@@ -339,7 +350,8 @@ void VoxelGraphEditorNode::poll_params(const VoxelGraphFunction &graph) {
 
 void VoxelGraphEditorNode::update_range_analysis_tooltips(
 		const GraphEditorAdapter &adapter,
-		const pg::Runtime::State &state
+		const pg::Runtime::State &state,
+		const StdUnorderedMap<uint32_t, math::Interval> &actual_ranges
 ) {
 	for (unsigned int port_index = 0; port_index < _output_labels.size(); ++port_index) {
 		ProgramGraph::PortLocation loc;
@@ -350,8 +362,27 @@ void VoxelGraphEditorNode::update_range_analysis_tooltips(
 			continue;
 		}
 		const math::Interval range = state.get_range(address);
+		String text = String("Min: {0}\nMax: {1}").format(varray(range.min, range.max));
+
+		const auto actual_range_it = actual_ranges.find(address);
+		if (actual_range_it != actual_ranges.end()) {
+			const math::Interval actual_range = actual_range_it->second;
+
+			text += String("\nActual Min: {0}").format(varray(actual_range.min));
+			const float min_err = range.min - actual_range.min;
+			if (min_err > 0.f) {
+				text += String(" | ERROR: {0}").format(varray(min_err));
+			}
+
+			text += String("\nActual Max: {0}").format(varray(actual_range.max));
+			const float max_err = actual_range.max - range.max;
+			if (max_err > 0.f) {
+				text += String(" | ERROR: {0}").format(varray(max_err));
+			}
+		}
+
 		Control *label = _output_labels[port_index];
-		label->set_tooltip_text(String("Min: {0}\nMax: {1}").format(varray(range.min, range.max)));
+		label->set_tooltip_text(text);
 	}
 }
 

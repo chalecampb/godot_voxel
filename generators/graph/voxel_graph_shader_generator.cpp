@@ -9,6 +9,7 @@
 #include "../../util/string/format.h"
 #include "node_type_db.h"
 #include "voxel_graph_compiler.h"
+#include "voxel_graph_script_node.h"
 #include <sstream>
 
 namespace zylann::voxel::pg {
@@ -239,6 +240,7 @@ CompilationResult generate_shader(
 		codegen.indent();
 
 		ShaderGenContext ctx(
+				node_id,
 				node.params,
 				to_span(input_names, node.inputs.size()),
 				to_span(output_names, node.outputs.size()),

@@ -21,6 +21,8 @@ public:
 	Result generate_block(VoxelGenerator::VoxelQueryData input) override;
 	int get_used_channels_mask() const override;
 
+	bool is_runnable() const override;
+
 protected:
 	GDVIRTUAL3(_generate_block, Ref<godot::VoxelBuffer>, Vector3i, int)
 	GDVIRTUAL0RC(int, _get_used_channels_mask) // I think `C` means `const`?

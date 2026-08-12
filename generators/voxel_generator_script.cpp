@@ -2,6 +2,8 @@
 #include "../constants/voxel_string_names.h"
 #include "../storage/voxel_buffer_gd.h"
 #include "../util/godot/check_ref_ownership.h"
+#include "../util/godot/classes/engine.h"
+#include "../util/godot/classes/script.h"
 
 #ifdef ZN_GODOT
 #include "../util/godot/core/class_db.h"
@@ -47,6 +49,17 @@ int VoxelGeneratorScript::get_used_channels_mask() const {
 		WARN_PRINT_ONCE("VoxelGeneratorScript::_get_used_channels_mask is unimplemented!");
 	}
 	return mask;
+}
+
+bool VoxelGeneratorScript::is_runnable() const {
+	Ref<Script> my_script = get_script();
+	if (my_script.is_null()) {
+		return false;
+	}
+	if (Engine::get_singleton()->is_editor_hint()) {
+		return my_script->is_tool();
+	}
+	return true;
 }
 
 void VoxelGeneratorScript::_bind_methods() {
