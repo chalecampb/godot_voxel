@@ -81,6 +81,8 @@ public:
 	static void process_graph_node_buffer(Runtime::ProcessBufferContext &ctx);
 	static void analyze_graph_node_range(Runtime::RangeAnalysisContext &ctx);
 	static void generate_graph_node_shader(ShaderGenContext &ctx);
+	static void compile_graph_texture_2d(CompileContext &ctx);
+	static void generate_graph_texture_2d_shader(ShaderGenContext &ctx);
 	static void update_registered_graph_node_layout(
 			ProgramGraph &graph,
 			uint32_t node_id,

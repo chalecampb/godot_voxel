@@ -234,6 +234,13 @@ Pass-through node, allowing to better organize the path of long connections.
 
 Runs a custom [VoxelGraphScriptNode](api/VoxelGraphScriptNode.md) resource backed by a script contract. Inputs, outputs, and parameters are defined by the assigned script.
 
+### ScriptGraphTexture2D
+
+Inputs: `x`, `z`
+Outputs: defined by the assigned script
+
+Runs a [VoxelGraphScriptNode](api/VoxelGraphScriptNode.md) as a procedural 2D field. Its script must define exactly two float inputs named `x` and `z`, in that order, and float outputs. It must also implement `get_output_bounds()`, returning a Dictionary that maps every output name to a `Vector2(min, max)`. Bounds must be finite, ordered, and representable as floats. The declared intervals constrain CPU and GPU results and are used for graph range analysis.
+
 ## Noise
 
 ### FastNoise2D

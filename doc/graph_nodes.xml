@@ -454,6 +454,9 @@
 			Runs a custom [VoxelGraphScriptNode] resource backed by a script contract. Inputs, outputs, and parameters are defined by the assigned script.
 		</description>
 	</node>
+	<node name="ScriptGraphTexture2D" category="Generate">
+		<description>Runs a VoxelGraphScriptNode as a bounded procedural 2D field. Requires float inputs x and z and get_output_bounds() returning finite Vector2 bounds for every output.</description>
+	</node>
 	<node name="Sin" category="Math">
 		<input name="x" default_value="0"/>
 		<output name="out"/>
