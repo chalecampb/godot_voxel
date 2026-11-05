@@ -70,6 +70,27 @@ void register_misc_nodes(Span<NodeType> types) {
 		t.update_node_layout_func = &VoxelGraphScriptNode::update_registered_graph_node_layout;
 	}
 	{
+		NodeType &t = types[VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D];
+		t.name = "ScriptGraphTexture2D";
+		t.category = CATEGORY_GENERATE;
+		t.inputs.push_back(NodeType::Port("x", 0.f, VoxelGraphFunction::AUTO_CONNECT_X));
+		t.inputs.push_back(NodeType::Port("z", 0.f, VoxelGraphFunction::AUTO_CONNECT_Z));
+		NodeType::Param node_param(
+				"script_node", VoxelGraphScriptNode::get_class_static(),
+				&VoxelGraphScriptNode::create_default_graph_node_resource
+		);
+		node_param.hidden = true;
+		t.params.push_back(node_param);
+		t.compile_func = &VoxelGraphScriptNode::compile_graph_texture_2d;
+		t.process_buffer_func = &VoxelGraphScriptNode::process_graph_node_buffer;
+		t.range_analysis_func = &VoxelGraphScriptNode::analyze_graph_node_range;
+		t.shader_gen_func = &VoxelGraphScriptNode::generate_graph_texture_2d_shader;
+		t.debug_only = false;
+		t.is_pseudo_node = false;
+		t.uses_dynamic_runtime_ports = true;
+		t.update_node_layout_func = &VoxelGraphScriptNode::update_registered_graph_node_layout;
+	}
+	{
 		struct Params {
 			float threshold;
 		};

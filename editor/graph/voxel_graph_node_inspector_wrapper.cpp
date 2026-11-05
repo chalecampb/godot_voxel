@@ -21,7 +21,7 @@ const char *SHADER_PATH_PROPERTY_NAME = "shader_path";
 
 bool try_get_script_graph_node(Ref<VoxelGraphFunction> graph, uint32_t node_id, Ref<VoxelGraphScriptNode> &out_node) {
 	if (graph.is_null() || !graph->has_node(node_id) ||
-			graph->get_node_type_id(node_id) != VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			!VoxelGraphFunction::is_script_graph_node_type(graph->get_node_type_id(node_id))) {
 		return false;
 	}
 	out_node = graph->get_node_param(node_id, 0);
@@ -79,7 +79,10 @@ void VoxelGraphNodeInspectorWrapper::_get_property_list(List<PropertyInfo> *p_li
 
 	Ref<VoxelGraphScriptNode> custom_node;
 	if (try_get_script_graph_node(graph, _node_id, custom_node)) {
-		p_list->push_back(PropertyInfo(Variant::NIL, "ScriptGraphNode", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_CATEGORY));
+		const String category = graph->get_node_type_id(_node_id) == VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D
+				? "ScriptGraphTexture2D"
+				: "ScriptGraphNode";
+		p_list->push_back(PropertyInfo(Variant::NIL, category, PROPERTY_HINT_NONE, "", PROPERTY_USAGE_CATEGORY));
 		p_list->push_back(
 				PropertyInfo(
 						Variant::OBJECT,

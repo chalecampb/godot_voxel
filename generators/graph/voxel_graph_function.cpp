@@ -931,7 +931,7 @@ uint64_t VoxelGraphFunction::get_output_graph_hash() const {
 					// tell which properties contribute to the result. This should be rare though.
 					hash = hash_djb2_one_64(godot::get_deep_hash(*obj), hash);
 				}
-				if (node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+				if (VoxelGraphFunction::is_script_graph_node_type(node.type_id)) {
 					Ref<VoxelGraphScriptNode> script_node = v;
 					if (script_node.is_valid()) {
 						hash = hash_djb2_one_64(script_node->get_revision(), hash);
@@ -1344,7 +1344,7 @@ bool load_graph_from_variant_data(ProgramGraph &graph, Dictionary data, String r
 		}
 
 		Ref<VoxelGraphScriptNode> script_node_resource;
-		if (type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+		if (VoxelGraphFunction::is_script_graph_node_type(type_id)) {
 			const NodeType &ntype = type_db.get_type(type_id);
 			ZN_ASSERT(ntype.params.size() >= 1);
 			const String script_node_key = ntype.params[0].name;
@@ -1386,7 +1386,7 @@ bool load_graph_from_variant_data(ProgramGraph &graph, Dictionary data, String r
 				continue;
 			}
 			if (param_name == "dynamic_inputs") {
-				if (type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+				if (VoxelGraphFunction::is_script_graph_node_type(type_id)) {
 					continue;
 				}
 				const Array dynamic_inputs_data = node_data[param_key];
@@ -2360,6 +2360,7 @@ void VoxelGraphFunction::_bind_methods() {
 	BIND_ENUM_CONSTANT(NODE_SPOTS_2D);
 	BIND_ENUM_CONSTANT(NODE_SPOTS_3D);
 	BIND_ENUM_CONSTANT(NODE_SCRIPT_GRAPH);
+	BIND_ENUM_CONSTANT(NODE_SCRIPT_GRAPH_TEXTURE_2D);
 	BIND_ENUM_CONSTANT(NODE_TYPE_COUNT);
 #ifdef VOXEL_ENABLE_FAST_NOISE_2
 	BIND_ENUM_CONSTANT(NODE_FAST_NOISE_2_2D);
