@@ -144,6 +144,7 @@ def get_sources(env, is_editor_build):
         "util/godot/direct_static_body.cpp",
         "util/godot/file_utils.cpp",
         "util/godot/shader_material_pool.cpp",
+        "util/godot/string_names.cpp",
 
         "util/io/*.cpp",
 
@@ -159,6 +160,7 @@ def get_sources(env, is_editor_build):
             "editor/terrain/*.cpp",
             "editor/fast_noise_lite/*.cpp",
             "editor/spot_noise/*.cpp",
+            "editor/noise/*.cpp",
             "editor/graph/*.cpp",
             "editor/blocky_library/*.cpp",
             "editor/blocky_library/types/*.cpp",

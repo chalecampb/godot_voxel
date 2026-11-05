@@ -50,6 +50,8 @@ union VoxelSingleValue {
 class VoxelGenerator : public Resource {
 	GDCLASS(VoxelGenerator, Resource)
 public:
+	static const char *SIGNAL_REGENERATION_REQUESTED;
+
 	VoxelGenerator();
 
 	struct Result {
@@ -186,6 +188,11 @@ public:
 	virtual void process_viewer_diff(ViewerID viewer_id, Box3i p_requested_box, Box3i p_prev_requested_box);
 
 	virtual void clear_cache();
+
+// Hints whether the stream's functions can be called. Mainly used in case of script implementations, to avoid error
+	// spams.
+	virtual bool is_runnable() const;
+	virtual void request_regeneration();
 
 	// Editor
 

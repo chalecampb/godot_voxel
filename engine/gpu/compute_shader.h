@@ -4,6 +4,7 @@
 #include "../../util/godot/core/rid.h"
 #include "../../util/godot/core/string.h"
 #include "../../util/memory/memory.h"
+#include <atomic>
 
 ZN_GODOT_FORWARD_DECLARE(class RenderingDevice)
 
@@ -50,7 +51,12 @@ public:
 	// Only use on GPU task thread
 	RID get_rid() const;
 
+	bool is_compilation_complete() const;
+	bool is_compilation_successful() const;
+
 private:
+	std::atomic_bool _compilation_complete{ false };
+	std::atomic_bool _compilation_successful{ false };
 	ComputeShaderInternal _internal;
 };
 

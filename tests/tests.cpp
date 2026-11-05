@@ -157,6 +157,7 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_voxel_stream_sqlite_key_blob80_encoding);
 	VOXEL_TEST(test_voxel_stream_sqlite_basic);
 	VOXEL_TEST(test_voxel_stream_sqlite_coordinate_format);
+	VOXEL_TEST(test_voxel_stream_sqlite_transaction_recovery);
 #endif
 	VOXEL_TEST(test_sdf_hemisphere);
 	VOXEL_TEST(test_fnl_range);
@@ -179,6 +180,33 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_voxel_graph_broad_block);
 	VOXEL_TEST(test_voxel_graph_set_default_input_by_name);
 	VOXEL_TEST(test_voxel_graph_get_io_indices);
+	VOXEL_TEST(test_voxel_graph_sgn_load_script_contract);
+	VOXEL_TEST(test_voxel_graph_sgn_clear_script_reverts_ports);
+	VOXEL_TEST(test_voxel_graph_sgn_child_resource_change_invalidates_validation);
+	VOXEL_TEST(test_voxel_graph_sgn_shader_path_property);
+	VOXEL_TEST(test_voxel_graph_sgn_shader_compilation);
+	VOXEL_TEST(test_voxel_graph_sgn_shader_project_file_validation);
+#ifdef VOXEL_ENABLE_GPU
+	VOXEL_TEST(test_voxel_graph_sgn_bad_shader_gpu_generation_fallback);
+#endif
+	VOXEL_TEST(test_voxel_graph_script_node_contract);
+	VOXEL_TEST(test_voxel_graph_script_node_cpu_execution);
+	VOXEL_TEST(test_voxel_graph_script_node_debug_compile_does_not_emit_changed);
+	VOXEL_TEST(test_voxel_graph_script_node_port_refresh);
+	VOXEL_TEST(test_voxel_graph_script_node_copy_keeps_connections_after_reload);
+	VOXEL_TEST(test_voxel_graph_script_texture_2d_contract_execution);
+	VOXEL_TEST(test_voxel_graph_script_texture_2d_rejects_invalid_bounds);
+	VOXEL_TEST(test_voxel_graph_script_texture_2d_clamps_and_rebuilds_snapshot_bounds);
+	VOXEL_TEST(test_voxel_graph_script_texture_2d_rejects_missing_contract);
+	VOXEL_TEST(test_voxel_graph_script_texture_2d_persistence_keeps_dynamic_connections);
+	VOXEL_TEST(test_voxel_graph_script_texture_2d_bounds_enable_broad_block_culling);
+#ifdef TOOLS_ENABLED
+	VOXEL_TEST(test_voxel_graph_sgn_inspector_hides_validation_properties);
+	VOXEL_TEST(test_voxel_graph_editor_create_dynamic_layout_node);
+#endif
+#ifdef VOXEL_ENABLE_GPU
+	VOXEL_TEST(test_voxel_graph_script_texture_2d_gpu_shader_compiles);
+#endif
 
 	print_line("------------ Voxel tests end -------------");
 }
