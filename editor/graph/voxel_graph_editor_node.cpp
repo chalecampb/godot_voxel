@@ -238,7 +238,7 @@ void VoxelGraphEditorNode::update_title(const VoxelGraphFunction &graph, uint32_
 		}
 
 	} else if (zylann::godot::is_empty(node_name)) {
-		if (type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+		if (VoxelGraphFunction::is_script_graph_node_type(type_id)) {
 			Ref<VoxelGraphScriptNode> script_node = graph.get_node_param(node_id, 0);
 			const String script_name = script_node.is_valid() ? script_node->get_script_path().get_file().get_basename() : String();
 			if (zylann::godot::is_empty(script_name)) {

@@ -12,12 +12,16 @@
 #include "../../util/godot/core/string.h"
 #include "../../util/io/log.h"
 #include "../../util/macros.h"
+#include "../../util/profiling.h"
 #include "../../util/string/format.h"
 #include "../../util/thread/mutex.h"
 #include "../../util/thread/thread.h"
 #include "voxel_graph_function.h"
 
 #include <regex>
+#include <cmath>
+#include <limits>
+#include <charconv>
 
 namespace zylann::voxel::pg {
 
@@ -27,6 +31,7 @@ namespace {
 
 struct ScriptGraphNodeRuntimeData {
 	Ref<VoxelGraphScriptNode> script_node;
+	StdVector<math::Interval> output_bounds;
 	Mutex mutex;
 	StdUnorderedMap<Thread::ID, Ref<VoxelGraphScriptNode>> thread_nodes;
 
@@ -241,6 +246,59 @@ void push_required_name_error(PackedStringArray &errors, const String &kind, con
 	}
 }
 
+bool get_texture_2d_output_bounds(Ref<VoxelGraphScriptNode> script_node, StdVector<math::Interval> &bounds, String &error) {
+	if (script_node.is_null() || !script_node->has_method("get_output_bounds")) {
+		error = "ScriptGraphTexture2D script must define get_output_bounds().";
+		return false;
+	}
+	const Variant result = script_node->call("get_output_bounds");
+	if (result.get_type() != Variant::DICTIONARY) {
+		error = "ScriptGraphTexture2D get_output_bounds() must return a Dictionary.";
+		return false;
+	}
+	const Dictionary dictionary = result;
+	const Span<const Ref<VoxelGraphScriptNodePort>> outputs = script_node->get_output_ports();
+	bounds.clear();
+	bounds.reserve(outputs.size());
+	for (const Ref<VoxelGraphScriptNodePort> &port : outputs) {
+		if (port.is_null() || port->get_port_type() != Variant::FLOAT) {
+			error = "ScriptGraphTexture2D outputs must be valid float ports.";
+			return false;
+		}
+		const String name = port->get_port_name();
+		if (!dictionary.has(name)) {
+			error = String("ScriptGraphTexture2D output `{0}` has no declared bounds.").format(varray(name));
+			return false;
+		}
+		const Variant value = dictionary[name];
+		if (value.get_type() != Variant::VECTOR2) {
+			error = String("ScriptGraphTexture2D bounds for `{0}` must be a Vector2.").format(varray(name));
+			return false;
+		}
+		const Vector2 range = value;
+		const double minimum = range.x;
+		const double maximum = range.y;
+		if (!std::isfinite(minimum) || !std::isfinite(maximum) || minimum > maximum ||
+				std::abs(minimum) > std::numeric_limits<float>::max() || std::abs(maximum) > std::numeric_limits<float>::max()) {
+			error = String("ScriptGraphTexture2D bounds for `{0}` must be finite, ordered, and representable as floats.").format(varray(name));
+			return false;
+		}
+		bounds.push_back(math::Interval(static_cast<float>(minimum), static_cast<float>(maximum)));
+	}
+	return true;
+}
+
+StdString get_glsl_float_literal_roundtrip(float value) {
+	char buffer[64];
+	const std::to_chars_result result = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::general, std::numeric_limits<float>::max_digits10);
+	ZN_ASSERT(result.ec == std::errc());
+	StdString literal(buffer, static_cast<size_t>(result.ptr - buffer));
+	if (literal.find('.') == StdString::npos && literal.find('e') == StdString::npos && literal.find('E') == StdString::npos) {
+		literal += ".0";
+	}
+	return literal;
+}
+
 StdString get_dynamic_port_name(const ProgramGraph::Port &port) {
 	return port.dynamic_name;
 }
@@ -396,6 +454,7 @@ void VoxelGraphScriptNode::compile_graph_node(CompileContext &ctx) {
 }
 
 void VoxelGraphScriptNode::process_graph_node_buffer(Runtime::ProcessBufferContext &ctx) {
+	ZN_PROFILE_SCOPE_NAMED("Script graph samples");
 	const ScriptGraphNodeParams &params = ctx.get_params<ScriptGraphNodeParams>();
 	ZN_ASSERT_RETURN(params.runtime_data != nullptr);
 	Ref<VoxelGraphScriptNode> script_node = params.runtime_data->get_thread_node();
@@ -431,7 +490,13 @@ void VoxelGraphScriptNode::process_graph_node_buffer(Runtime::ProcessBufferConte
 			const Ref<VoxelGraphScriptNodePort> &port = output_ports[output_index];
 			if (port.is_valid()) {
 				Runtime::Buffer &output = ctx.get_output(output_index);
-				output.data[buffer_index] = outputs.get(port->get_port_name(), 0.f).operator float();
+				const float value = outputs.get(port->get_port_name(), 0.f).operator float();
+				if (params.runtime_data->output_bounds.empty()) {
+					output.data[buffer_index] = value;
+				} else {
+					const math::Interval bounds = params.runtime_data->output_bounds[output_index];
+					output.data[buffer_index] = std::isfinite(value) ? math::clamp(value, bounds.min, bounds.max) : bounds.min;
+				}
 			}
 		}
 	}
@@ -440,7 +505,7 @@ void VoxelGraphScriptNode::process_graph_node_buffer(Runtime::ProcessBufferConte
 void VoxelGraphScriptNode::analyze_graph_node_range(Runtime::RangeAnalysisContext &ctx) {
 	const ScriptGraphNodeParams &params = ctx.get_params<ScriptGraphNodeParams>();
 	for (uint32_t output_index = 0; output_index < params.output_count; ++output_index) {
-		ctx.set_output(output_index, math::Interval::from_infinity());
+		ctx.set_output(output_index, params.runtime_data->output_bounds.empty() ? math::Interval::from_infinity() : params.runtime_data->output_bounds[output_index]);
 	}
 }
 
@@ -472,23 +537,107 @@ void VoxelGraphScriptNode::generate_graph_node_shader(ShaderGenContext &ctx) {
 	ctx.add_format("{}", ");\n");
 }
 
+void VoxelGraphScriptNode::compile_graph_texture_2d(CompileContext &ctx) {
+	Ref<VoxelGraphScriptNode> source = ctx.get_param(0);
+	if (source.is_null()) {
+		ctx.make_error("ScriptGraphTexture2D has no VoxelGraphScriptNode resource assigned.");
+		return;
+	}
+	if (source->get_input_ports().size() != 2 || source->get_input_ports()[0].is_null() || source->get_input_ports()[1].is_null() ||
+			source->get_input_ports()[0]->get_port_name() != "x" || source->get_input_ports()[1]->get_port_name() != "z" ||
+			source->get_input_ports()[0]->get_port_type() != Variant::FLOAT || source->get_input_ports()[1]->get_port_type() != Variant::FLOAT) {
+		ctx.make_error("ScriptGraphTexture2D requires exactly two float inputs named x and z, in that order.");
+		return;
+	}
+	if (source->get_script_path().is_empty() || !source->validate()) {
+		ctx.make_error("ScriptGraphTexture2D script contract is invalid.");
+		return;
+	}
+	Ref<Resource> duplicate = source->duplicate(true);
+	Ref<VoxelGraphScriptNode> snapshot = duplicate;
+	if (snapshot.is_null()) {
+		ctx.make_error("ScriptGraphTexture2D could not duplicate its resource for compilation.");
+		return;
+	}
+	StdVector<math::Interval> bounds;
+	String error;
+	if (!get_texture_2d_output_bounds(snapshot, bounds, error)) {
+		ctx.make_error(error);
+		return;
+	}
+	ScriptGraphNodeRuntimeData *runtime_data = ZN_NEW(ScriptGraphNodeRuntimeData);
+	runtime_data->script_node = snapshot;
+	runtime_data->output_bounds = bounds;
+	ctx.add_delete_cleanup(runtime_data);
+	ctx.set_params(ScriptGraphNodeParams{ runtime_data, 2, static_cast<uint32_t>(snapshot->get_output_ports().size()) });
+}
+
+void VoxelGraphScriptNode::generate_graph_texture_2d_shader(ShaderGenContext &ctx) {
+	Ref<VoxelGraphScriptNode> script_node = ctx.get_param(0);
+	if (script_node.is_null() || script_node->get_input_ports().size() != 2 || script_node->get_input_ports()[0].is_null() || script_node->get_input_ports()[1].is_null() ||
+			script_node->get_input_ports()[0]->get_port_name() != "x" || script_node->get_input_ports()[1]->get_port_name() != "z" ||
+		script_node->get_input_ports()[0]->get_port_type() != Variant::FLOAT || script_node->get_input_ports()[1]->get_port_type() != Variant::FLOAT) {
+		ctx.make_error("ScriptGraphTexture2D requires exactly two float inputs named x and z, in that order.");
+		return;
+	}
+	StdVector<math::Interval> bounds;
+	String error;
+	if (!get_texture_2d_output_bounds(script_node, bounds, error)) {
+		ctx.make_error(error);
+		return;
+	}
+	const VoxelGraphScriptNode::ShaderSource shader_source = script_node->get_shader_source(ctx.get_node_id());
+	if (!shader_source.success) {
+		ctx.make_error(shader_source.error);
+		return;
+	}
+	ctx.require_lib_code(shader_source.function_name.c_str(), shader_source.source_code.c_str());
+	ctx.add_format("{}({}, {}", shader_source.function_name, ctx.get_input_name(0), ctx.get_input_name(1));
+	for (unsigned int i = 0; i < bounds.size(); ++i) {
+		ctx.add_format(", {}", ctx.get_output_name(i));
+	}
+	ctx.add_format("{}", ");\n");
+	for (unsigned int i = 0; i < bounds.size(); ++i) {
+		const StdString minimum = get_glsl_float_literal_roundtrip(bounds[i].min);
+		const StdString maximum = get_glsl_float_literal_roundtrip(bounds[i].max);
+		ctx.add_format("{} = (isnan({}) || isinf({})) ? {} : clamp({}, {}, {});\n",
+				ctx.get_output_name(i), ctx.get_output_name(i), ctx.get_output_name(i), minimum.c_str(),
+				ctx.get_output_name(i), minimum.c_str(), maximum.c_str());
+	}
+}
+
 void VoxelGraphScriptNode::update_registered_graph_node_layout(
 		ProgramGraph &graph,
 		uint32_t node_id,
 		StdVector<ProgramGraph::Connection> *removed_connections
 ) {
 	ProgramGraph::Node &node = graph.get_node(node_id);
-	ZN_ASSERT(node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	ZN_ASSERT(VoxelGraphFunction::is_script_graph_node_type(node.type_id));
 	ZN_ASSERT_RETURN(node.params.size() >= 1);
+	const bool is_texture_2d = node.type_id == VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D;
+	const bool autoconnect_default_inputs = node.autoconnect_default_inputs;
 	Ref<VoxelGraphScriptNode> script_node = node.params[0];
 	if (script_node.is_null()) {
 		node.inputs.clear();
 		node.outputs.clear();
 		node.default_inputs.clear();
-		node.autoconnect_default_inputs = false;
+		if (!is_texture_2d) {
+			node.autoconnect_default_inputs = false;
+		}
 		return;
 	}
 	script_node->update_graph_node_layout(graph, node_id, removed_connections);
+	if (is_texture_2d) {
+		const Span<const Ref<VoxelGraphScriptNodePort>> input_ports = script_node->get_input_ports();
+		const bool valid_texture_inputs = input_ports.size() == 2 && input_ports[0].is_valid() && input_ports[1].is_valid() &&
+				input_ports[0]->get_port_name() == "x" && input_ports[1]->get_port_name() == "z" &&
+				input_ports[0]->get_port_type() == Variant::FLOAT && input_ports[1]->get_port_type() == Variant::FLOAT;
+		if (valid_texture_inputs && node.inputs.size() == 2) {
+			node.inputs[0].autoconnect_hint = VoxelGraphFunction::AUTO_CONNECT_X;
+			node.inputs[1].autoconnect_hint = VoxelGraphFunction::AUTO_CONNECT_Z;
+		}
+		node.autoconnect_default_inputs = autoconnect_default_inputs;
+	}
 }
 
 void VoxelGraphScriptNode::update_graph_node_layout(
