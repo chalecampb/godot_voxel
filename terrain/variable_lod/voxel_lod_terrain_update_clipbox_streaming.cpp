@@ -1419,6 +1419,16 @@ void set_active(
 			ZN_CRASH();
 			break;
 	}
+
+	// An edit can mark a mesh block as needing an update while it is inactive. In that case the update is not
+	// scheduled (see `VoxelLodTerrainUpdateTask::schedule_mesh_update`), because nothing needs that mesh yet. Now that
+	// the block is becoming active, its out-of-date mesh is needed, and nothing else would schedule the update later:
+	// the block would stay in `MESH_NEED_UPDATE` forever, and `is_area_meshed` would never return true for it.
+	if (mesh_block.state == VoxelLodTerrainUpdateData::MESH_NEED_UPDATE) {
+		VoxelLodTerrainUpdateTask::schedule_mesh_update(
+				mesh_block, bpos, lod.mesh_blocks_pending_update, mesh_block.mesh_viewers.get() > 0
+		);
+	}
 }
 
 void set_inactive(
