@@ -48,6 +48,33 @@ void test_voxel_graph_broad_block();
 void test_voxel_graph_set_default_input_by_name();
 void test_voxel_graph_get_io_indices();
 void test_voxel_graph_xz_caching();
+void test_voxel_graph_sgn_load_script_contract();
+void test_voxel_graph_sgn_clear_script_reverts_ports();
+void test_voxel_graph_sgn_child_resource_change_invalidates_validation();
+void test_voxel_graph_sgn_shader_path_property();
+void test_voxel_graph_sgn_shader_compilation();
+void test_voxel_graph_sgn_shader_project_file_validation();
+#ifdef VOXEL_ENABLE_GPU
+void test_voxel_graph_sgn_bad_shader_gpu_generation_fallback();
+#endif
+void test_voxel_graph_script_node_contract();
+void test_voxel_graph_script_node_cpu_execution();
+void test_voxel_graph_script_node_debug_compile_does_not_emit_changed();
+void test_voxel_graph_script_node_port_refresh();
+void test_voxel_graph_script_node_copy_keeps_connections_after_reload();
+void test_voxel_graph_script_texture_2d_contract_execution();
+void test_voxel_graph_script_texture_2d_rejects_invalid_bounds();
+void test_voxel_graph_script_texture_2d_clamps_and_rebuilds_snapshot_bounds();
+void test_voxel_graph_script_texture_2d_rejects_missing_contract();
+void test_voxel_graph_script_texture_2d_persistence_keeps_dynamic_connections();
+void test_voxel_graph_script_texture_2d_bounds_enable_broad_block_culling();
+#ifdef TOOLS_ENABLED
+void test_voxel_graph_sgn_inspector_hides_validation_properties();
+void test_voxel_graph_editor_create_dynamic_layout_node();
+#endif
+#ifdef VOXEL_ENABLE_GPU
+void test_voxel_graph_script_texture_2d_gpu_shader_compiles();
+#endif
 
 } // namespace zylann::voxel::tests
 

@@ -85,6 +85,15 @@ void GenerateBlockTask::run_gpu_task(zylann::ThreadedTaskContext &ctx) {
 
 	std::shared_ptr<ComputeShader> generator_shader = generator->get_block_rendering_shader();
 	ERR_FAIL_COND(generator_shader == nullptr);
+	if (!generator_shader->is_compilation_complete()) {
+		ctx.status = ThreadedTaskContext::STATUS_POSTPONED;
+		return;
+	}
+	if (!generator_shader->is_compilation_successful()) {
+		run_cpu_generation();
+		run_stream_saving_and_finish();
+		return;
+	}
 
 	const Vector3i origin_in_voxels = (_position << _lod_index) * _block_size;
 

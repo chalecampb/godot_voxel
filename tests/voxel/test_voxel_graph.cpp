@@ -1,15 +1,23 @@
 #include "test_voxel_graph.h"
+#include "../../constants/voxel_string_names.h"
+#include "../../engine/gpu/compute_shader.h"
+#include "../../engine/voxel_engine.h"
+#include "../../generators/generate_block_task.h"
 #include "../../generators/graph/curve_utility.h"
 #include "../../generators/graph/image_range_grid.h"
 #include "../../generators/graph/image_utility.h"
 #include "../../generators/graph/node_type_db.h"
 #include "../../generators/graph/voxel_generator_graph.h"
+#include "../../generators/graph/voxel_graph_script_node.h"
 #include "../../storage/mixel4.h"
 #include "../../storage/voxel_buffer.h"
 #include "../../util/containers/container_funcs.h"
 #include "../../util/containers/std_vector.h"
 #include "../../util/godot/classes/fast_noise_lite.h"
 #include "../../util/godot/classes/image.h"
+#include "../../util/godot/classes/object.h"
+#include "../../util/godot/classes/time.h"
+#include "../../util/godot/core/callable_mp.h"
 #include "../../util/godot/core/random_pcg.h"
 #include "../../util/io/std_string_text_writer.h"
 #include "../../util/math/conv.h"
@@ -19,6 +27,13 @@
 #include "../../util/string/std_string.h"
 #include "../../util/testing/test_macros.h"
 #include "test_util.h"
+#if defined(TOOLS_ENABLED) && defined(ZN_GODOT)
+#include "../../../../tests/test_tools.h"
+#endif
+#ifdef TOOLS_ENABLED
+#include "../../editor/graph/voxel_graph_editor.h"
+#include "../../editor/graph/voxel_graph_node_inspector_wrapper.h"
+#endif
 #include <sstream>
 
 #ifdef VOXEL_ENABLE_FAST_NOISE_2
@@ -2862,5 +2877,773 @@ void test_voxel_graph_xz_caching() {
 		}
 	}
 }
+
+namespace {
+
+const char *SGN_TEST_SCRIPT_PATH = "res://tests/sgn_test_node.gd";
+const char *SGN_TEST_SHADER_PATH = "res://tests/sgn_test_node.glsl";
+const char *SGN_BAD_SHADER_SCRIPT_PATH = "res://tests/sgn_bad_shader.gd";
+const char *SGN_BAD_METADATA_SHADER_PATH = "res://tests/sgn_bad_metadata_shader.glsl";
+const char *SGN_GOOD_SHADER_PATH = "res://tests/sgn_good_shader.glsl";
+const char *SGT_TEST_SCRIPT_PATH = "res://tests/sgt_test_node.gd";
+const char *SGT_BAD_LAYOUT_SCRIPT_PATH = "res://tests/sgt_bad_layout_node.gd";
+const char *SGT_MISSING_BOUNDS_SCRIPT_PATH = "res://tests/sgt_missing_bounds_node.gd";
+
+class SignalCounter : public Object {
+public:
+	void increment() {
+		++count;
+	}
+
+	int count = 0;
+};
+
+Ref<VoxelGraphScriptNode> load_test_script_graph_node() {
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	const bool loaded = script_node->reload_script_contract(SGN_TEST_SCRIPT_PATH);
+	ZN_TEST_ASSERT(loaded);
+	ZN_TEST_ASSERT(script_node->validate());
+	return script_node;
+}
+
+uint32_t create_test_script_graph_node(VoxelGraphFunction &graph, Ref<VoxelGraphScriptNode> script_node) {
+	const uint32_t node_id = graph.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	ZN_TEST_ASSERT(node_id != ProgramGraph::NULL_ID);
+	graph.set_node_param(node_id, 0, script_node);
+	return node_id;
+}
+
+#ifdef VOXEL_ENABLE_GPU
+void wait_for_gpu_tasks_to_finish() {
+	const uint64_t time_before = Time::get_singleton()->get_ticks_usec();
+	while (VoxelEngine::get_singleton().get_pending_gpu_tasks_count() > 0) {
+		Thread::sleep_usec(1000);
+
+		const uint64_t timeout_seconds = 10;
+		const uint64_t now = Time::get_singleton()->get_ticks_usec();
+		const uint64_t time_elapsed_microseconds = now - time_before;
+		ZN_TEST_ASSERT(time_elapsed_microseconds < timeout_seconds * 1'000'000);
+	}
+}
+#endif
+
+} // namespace
+
+void test_voxel_graph_sgn_load_script_contract() {
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	script_node->set_script_path(SGN_TEST_SCRIPT_PATH);
+
+	ZN_TEST_ASSERT(script_node->get_script_path() == SGN_TEST_SCRIPT_PATH);
+	ZN_TEST_ASSERT(script_node->get_shader_path() == SGN_TEST_SHADER_PATH);
+	ZN_TEST_ASSERT(script_node->is_valid());
+	ZN_TEST_ASSERT(script_node->is_gpu_compatible());
+	ZN_TEST_ASSERT(script_node->get_validation_errors().size() == 0);
+	ZN_TEST_ASSERT(script_node->get_validation_warnings().size() == 0);
+
+	Span<const Ref<VoxelGraphScriptNodePort>> inputs = script_node->get_input_ports();
+	Span<const Ref<VoxelGraphScriptNodePort>> outputs = script_node->get_output_ports();
+	Span<const Ref<VoxelGraphScriptNodeParameter>> parameters = script_node->get_parameter_definitions();
+	ZN_TEST_ASSERT(inputs.size() == 2);
+	ZN_TEST_ASSERT(outputs.size() == 1);
+	ZN_TEST_ASSERT(parameters.size() == 1);
+	ZN_TEST_ASSERT(inputs[0]->get_port_name() == "x");
+	ZN_TEST_ASSERT(inputs[1]->get_port_name() == "bias");
+	ZN_TEST_ASSERT(outputs[0]->get_port_name() == "sdf");
+	ZN_TEST_ASSERT(parameters[0]->get_parameter_name() == "gain");
+	ZN_TEST_ASSERT(parameters[0]->get_default_value().operator float() == 2.f);
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	const uint32_t n_sgn = create_test_script_graph_node(**graph, script_node);
+	String input_name;
+	VoxelGraphFunction::AutoConnect autoconnect;
+	graph->get_node_input_info(n_sgn, 0, &input_name, &autoconnect);
+	ZN_TEST_ASSERT(input_name == "x");
+	graph->get_node_input_info(n_sgn, 1, &input_name, &autoconnect);
+	ZN_TEST_ASSERT(input_name == "bias");
+	ZN_TEST_ASSERT(graph->get_node_output_name(n_sgn, 0) == "sdf");
+}
+
+void test_voxel_graph_sgn_clear_script_reverts_ports() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	ZN_TEST_ASSERT(script_node->get_shader_path() == SGN_TEST_SHADER_PATH);
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	const uint32_t n_sgn = create_test_script_graph_node(**graph, script_node);
+	ZN_TEST_ASSERT(graph->get_node_input_count(n_sgn) == 2);
+	ZN_TEST_ASSERT(graph->get_node_output_count(n_sgn) == 1);
+
+	script_node->set_script_path(String());
+	graph->refresh_node_layout(n_sgn);
+
+	ZN_TEST_ASSERT(script_node->get_script_path().is_empty());
+	ZN_TEST_ASSERT(script_node->get_shader_path().is_empty());
+	ZN_TEST_ASSERT(script_node->get_attached_script().get_type() == Variant::NIL);
+	ZN_TEST_ASSERT(script_node->get_input_ports().size() == 0);
+	ZN_TEST_ASSERT(script_node->get_output_ports().size() == 0);
+	ZN_TEST_ASSERT(script_node->get_parameter_definitions().size() == 0);
+	ZN_TEST_ASSERT(!script_node->is_valid());
+	ZN_TEST_ASSERT(graph->get_node_input_count(n_sgn) == 0);
+	ZN_TEST_ASSERT(graph->get_node_output_count(n_sgn) == 0);
+}
+
+void test_voxel_graph_sgn_child_resource_change_invalidates_validation() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	ZN_TEST_ASSERT(script_node->validate());
+
+	Span<const Ref<VoxelGraphScriptNodePort>> outputs = script_node->get_output_ports();
+	ZN_TEST_ASSERT(outputs.size() == 1);
+	Ref<VoxelGraphScriptNodePort> output = outputs[0];
+	ZN_TEST_ASSERT(output.is_valid());
+
+	const uint64_t prev_revision = script_node->get_revision();
+	output->set_port_type(Variant::BOOL);
+
+	ZN_TEST_ASSERT(script_node->get_revision() != prev_revision);
+	ZN_TEST_ASSERT(!script_node->validate());
+	ZN_TEST_ASSERT(script_node->get_validation_errors().size() > 0);
+}
+
+void test_voxel_graph_sgn_shader_path_property() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	const uint32_t n_sgn = create_test_script_graph_node(**graph, script_node);
+	Ref<VoxelGraphScriptNode> graph_script_node = graph->get_node_param(n_sgn, 0);
+	ZN_TEST_ASSERT(graph_script_node.is_valid());
+
+	StdVector<zylann::godot::PropertyInfoWrapper> properties;
+	zylann::godot::get_property_list(**graph_script_node, properties);
+	bool found_shader_path = false;
+	for (const zylann::godot::PropertyInfoWrapper &property : properties) {
+		if (property.name == "shader_path") {
+			found_shader_path = true;
+			ZN_TEST_ASSERT(property.type == Variant::STRING);
+			ZN_TEST_ASSERT((property.usage & PROPERTY_USAGE_EDITOR) != 0);
+			break;
+		}
+	}
+
+	ZN_TEST_ASSERT(found_shader_path);
+	ZN_TEST_ASSERT(graph_script_node->get("shader_path") == SGN_TEST_SHADER_PATH);
+}
+
+void test_voxel_graph_sgn_shader_compilation() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	script_node->set_parameter_value("gain", 3.f);
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = create_test_script_graph_node(g, script_node);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 4.f);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	VoxelGraphFunction::ShaderResult shader_result = g.get_shader_source();
+	ZN_TEST_ASSERT(shader_result.compilation.success);
+	const StdString &code = shader_result.code_utf8;
+	ZN_TEST_ASSERT(code.find("void sgn_test_node_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find("const float sgn_test_node_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find("sgn_test_node_sgn_") == StdString::npos);
+	ZN_TEST_ASSERT(code.find(" = 3") != StdString::npos);
+}
+
+void test_voxel_graph_sgn_shader_project_file_validation() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	script_node->set_shader_path(SGN_BAD_METADATA_SHADER_PATH);
+
+	VoxelGraphScriptNode::ShaderSource shader_source = script_node->get_shader_source(1);
+	ZN_TEST_ASSERT(!shader_source.success);
+
+	script_node->set_shader_path(SGN_GOOD_SHADER_PATH);
+	shader_source = script_node->get_shader_source(1);
+	ZN_TEST_ASSERT(shader_source.success);
+}
+
+#ifdef VOXEL_ENABLE_GPU
+void test_voxel_graph_sgn_bad_shader_gpu_generation_fallback() {
+	VoxelEngine::get_singleton().try_initialize_gpu_features();
+
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	ZN_TEST_ASSERT(script_node->reload_script_contract(SGN_BAD_SHADER_SCRIPT_PATH));
+	ZN_TEST_ASSERT(script_node->validate());
+	script_node->set_parameter_value("gain", 0.25f);
+
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	g.clear();
+
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = create_test_script_graph_node(g, script_node);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 0.25f);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	const pg::CompilationResult compilation_result = generator->compile(false);
+	ZN_TEST_ASSERT(compilation_result.success);
+
+	generator->compile_shaders();
+	wait_for_gpu_tasks_to_finish();
+
+	std::shared_ptr<ComputeShader> shader = generator->get_block_rendering_shader();
+	ZN_TEST_ASSERT(shader != nullptr);
+	ZN_TEST_ASSERT(shader->is_compilation_complete());
+	ZN_TEST_ASSERT(!shader->is_compilation_successful());
+
+	std::shared_ptr<StreamingDependency> stream_dependency = make_shared_instance<StreamingDependency>();
+	stream_dependency->generator = generator;
+	stream_dependency->valid = true;
+
+	std::shared_ptr<VoxelBuffer> voxels = make_shared_instance<VoxelBuffer>(VoxelBuffer::ALLOCATOR_POOL);
+	const VoxelFormat voxel_format;
+	voxels->create(Vector3iUtil::create(4), &voxel_format);
+
+	VoxelGenerator::BlockTaskParams params;
+	params.block_position = Vector3i();
+	params.format = voxel_format;
+	params.lod_index = 0;
+	params.block_size = 4;
+	params.drop_beyond_max_distance = false;
+	params.use_gpu = true;
+	params.stream_dependency = stream_dependency;
+	params.voxels = voxels;
+
+	GenerateBlockTask task(params);
+	ThreadedTaskContext ctx(0, TaskPriority::max());
+	task.run(ctx);
+
+	ZN_TEST_ASSERT(ctx.status == ThreadedTaskContext::STATUS_COMPLETE);
+	ZN_TEST_ASSERT(VoxelEngine::get_singleton().get_pending_gpu_tasks_count() == 0);
+	ZN_TEST_ASSERT(voxels->get_size() == Vector3iUtil::create(4));
+	ZN_TEST_ASSERT(Math::abs(voxels->get_voxel_f(0, 0, 0, VoxelBuffer::CHANNEL_SDF) - 0.25f) < 0.01f);
+	ZN_TEST_ASSERT(Math::abs(voxels->get_voxel_f(1, 0, 0, VoxelBuffer::CHANNEL_SDF) - 0.5f) < 0.02f);
+}
+
+void test_voxel_graph_script_texture_2d_gpu_shader_compiles() {
+	VoxelEngine::get_singleton().try_initialize_gpu_features();
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	ZN_TEST_ASSERT(script_node->reload_script_contract(SGT_TEST_SCRIPT_PATH));
+	ZN_TEST_ASSERT(script_node->validate());
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	g.clear();
+	const uint32_t n_texture = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	ZN_TEST_ASSERT(g.get_node_default_inputs_autoconnect(n_texture));
+	g.set_node_param(n_texture, 0, script_node);
+	ZN_TEST_ASSERT(g.get_node_default_inputs_autoconnect(n_texture));
+	g.add_connection(n_texture, 0, n_out, 0);
+	ZN_TEST_ASSERT(generator->compile(false).success);
+	generator->compile_shaders();
+	wait_for_gpu_tasks_to_finish();
+	const std::shared_ptr<ComputeShader> shader = generator->get_block_rendering_shader();
+	ZN_TEST_ASSERT(shader != nullptr);
+	ZN_TEST_ASSERT(shader->is_compilation_complete());
+	ZN_TEST_ASSERT(shader->is_compilation_successful());
+}
+#endif
+
+void test_voxel_graph_script_node_contract() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	ZN_TEST_ASSERT(script_node->is_valid());
+	ZN_TEST_ASSERT(script_node->is_gpu_compatible());
+	ZN_TEST_ASSERT(script_node->get_validation_errors().size() == 0);
+	ZN_TEST_ASSERT(script_node->get_validation_warnings().size() == 0);
+
+	Span<const Ref<VoxelGraphScriptNodePort>> inputs = script_node->get_input_ports();
+	Span<const Ref<VoxelGraphScriptNodePort>> outputs = script_node->get_output_ports();
+	Span<const Ref<VoxelGraphScriptNodeParameter>> parameters = script_node->get_parameter_definitions();
+	ZN_TEST_ASSERT(inputs.size() == 2);
+	ZN_TEST_ASSERT(outputs.size() == 1);
+	ZN_TEST_ASSERT(parameters.size() == 1);
+	ZN_TEST_ASSERT(inputs[0]->get_port_name() == "x");
+	ZN_TEST_ASSERT(inputs[1]->get_port_name() == "bias");
+	ZN_TEST_ASSERT(outputs[0]->get_port_name() == "sdf");
+	ZN_TEST_ASSERT(parameters[0]->get_parameter_name() == "gain");
+
+	script_node->set_parameter_value("gain", 3.f);
+	ZN_TEST_ASSERT(script_node->get_parameter_value("gain").operator float() == 3.f);
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_sgn, 0, script_node);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 4.f);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	VoxelGraphFunction::ShaderResult shader_result = g.get_shader_source();
+	ZN_TEST_ASSERT(shader_result.compilation.success);
+	const StdString &code = shader_result.code_utf8;
+	ZN_TEST_ASSERT(code.find("void sgn_test_node_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find("const float sgn_test_node_") != StdString::npos);
+	ZN_TEST_ASSERT(code.find("sgn_test_node_sgn_") == StdString::npos);
+	ZN_TEST_ASSERT(code.find(" = 3") != StdString::npos);
+}
+
+void test_voxel_graph_script_node_cpu_execution() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	script_node->set_parameter_value("gain", 2.5f);
+
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	g.clear();
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_sgn, 0, script_node);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 1.5f);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	pg::CompilationResult result = generator->compile(false);
+	ZN_TEST_ASSERT(result.success);
+	ZN_TEST_ASSERT(
+			Math::is_equal_approx(generator->generate_single(Vector3i(4, 0, 0), VoxelBuffer::CHANNEL_SDF).f, 11.5f)
+	);
+	ZN_TEST_ASSERT(
+			Math::is_equal_approx(generator->generate_single(Vector3i(-2, 0, 0), VoxelBuffer::CHANNEL_SDF).f, -3.5f)
+	);
+}
+
+void test_voxel_graph_script_texture_2d_contract_execution() {
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	ZN_TEST_ASSERT(script_node->reload_script_contract(SGT_TEST_SCRIPT_PATH));
+	ZN_TEST_ASSERT(script_node->validate());
+	script_node->set_parameter_value("amplitude", 1.f);
+
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	g.clear();
+	const uint32_t n_texture = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	ZN_TEST_ASSERT(g.get_node_default_inputs_autoconnect(n_texture));
+	g.set_node_param(n_texture, 0, script_node);
+	ZN_TEST_ASSERT(g.get_node_default_inputs_autoconnect(n_texture));
+	g.add_connection(n_texture, 0, n_out, 0);
+
+	String input_name;
+	VoxelGraphFunction::AutoConnect auto_connect = VoxelGraphFunction::AUTO_CONNECT_NONE;
+	g.get_node_input_info(n_texture, 0, &input_name, &auto_connect);
+	ZN_TEST_ASSERT(input_name == "x");
+	ZN_TEST_ASSERT(auto_connect == VoxelGraphFunction::AUTO_CONNECT_X);
+	g.get_node_input_info(n_texture, 1, &input_name, &auto_connect);
+	ZN_TEST_ASSERT(input_name == "z");
+	ZN_TEST_ASSERT(auto_connect == VoxelGraphFunction::AUTO_CONNECT_Z);
+
+	const pg::CompilationResult result = generator->compile(false);
+	ZN_TEST_ASSERT_MSG(result.success, String("Failed to compile ScriptGraphTexture2D: {0}").format(varray(result.message)));
+	const float value = generator->generate_single(Vector3i(4, 0, -2), VoxelBuffer::CHANNEL_SDF).f;
+	ZN_TEST_ASSERT(Math::abs(value - (Math::sin(4.f) + Math::cos(-2.f))) < 0.001f);
+	ZN_TEST_ASSERT(Math::is_equal_approx(value, generator->generate_single(Vector3i(4, 9, -2), VoxelBuffer::CHANNEL_SDF).f));
+	ZN_TEST_ASSERT(Math::abs(value) <= 2.f);
+	Ref<VoxelGeneratorGraph> legacy_generator;
+	legacy_generator.instantiate();
+	Ref<VoxelGraphFunction> legacy_graph = legacy_generator->get_main_function();
+	VoxelGraphFunction &legacy = **legacy_graph;
+	const uint32_t n_x = legacy.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_z = legacy.create_node(VoxelGraphFunction::NODE_INPUT_Z);
+	const uint32_t n_sgn = legacy.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_legacy_out = legacy.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	legacy.set_node_param(n_sgn, 0, script_node);
+	legacy.add_connection(n_x, 0, n_sgn, 0);
+	legacy.add_connection(n_z, 0, n_sgn, 1);
+	legacy.add_connection(n_sgn, 0, n_legacy_out, 0);
+	ZN_TEST_ASSERT(legacy_generator->compile(false).success);
+	for (const Vector3i position : { Vector3i(4, -5, -2), Vector3i(-3, 2, 6) }) {
+		const float texture_value = generator->generate_single(position, VoxelBuffer::CHANNEL_SDF).f;
+		const float legacy_value = legacy_generator->generate_single(position, VoxelBuffer::CHANNEL_SDF).f;
+		ZN_TEST_ASSERT(Math::is_equal_approx(texture_value, legacy_value));
+	}
+
+	const VoxelGraphFunction::ShaderResult shader_result = g.get_shader_source();
+	ZN_TEST_ASSERT(shader_result.compilation.success);
+	ZN_TEST_ASSERT(shader_result.code_utf8.find("isnan(") != StdString::npos);
+	ZN_TEST_ASSERT(shader_result.code_utf8.find("clamp(") != StdString::npos);
+	script_node->set_parameter_value("amplitude", 1e-20f);
+	const VoxelGraphFunction::ShaderResult tiny_shader = g.get_shader_source();
+	ZN_TEST_ASSERT(tiny_shader.compilation.success);
+	ZN_TEST_ASSERT(tiny_shader.code_utf8.find("e-20") != StdString::npos);
+	script_node->set_parameter_value("amplitude", 1e30f);
+	const VoxelGraphFunction::ShaderResult large_shader = g.get_shader_source();
+	ZN_TEST_ASSERT(large_shader.compilation.success);
+	ZN_TEST_ASSERT(large_shader.code_utf8.find("e+30") != StdString::npos);
+}
+
+void test_voxel_graph_script_texture_2d_rejects_invalid_bounds() {
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	ZN_TEST_ASSERT(script_node->reload_script_contract(SGT_TEST_SCRIPT_PATH));
+	ZN_TEST_ASSERT(script_node->validate());
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	g.clear();
+	const uint32_t n_texture = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_texture, 0, script_node);
+	g.add_connection(n_texture, 0, n_out, 0);
+	for (int mode = 1; mode <= 4; ++mode) {
+		script_node->set_parameter_value("bounds_mode", mode);
+		const pg::CompilationResult result = generator->compile(false);
+		ZN_TEST_ASSERT(!result.success);
+		const VoxelGraphFunction::ShaderResult shader_result = g.get_shader_source();
+		ZN_TEST_ASSERT(!shader_result.compilation.success);
+	}
+}
+
+void test_voxel_graph_script_texture_2d_clamps_and_rebuilds_snapshot_bounds() {
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	ZN_TEST_ASSERT(script_node->reload_script_contract(SGT_TEST_SCRIPT_PATH));
+	ZN_TEST_ASSERT(script_node->validate());
+	script_node->set_parameter_value("amplitude", 1.f);
+	script_node->set_parameter_value("bounds_mode", 5);
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_texture = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_texture, 0, script_node);
+	g.add_connection(n_texture, 0, n_out, 0);
+	ZN_TEST_ASSERT(generator->compile(false).success);
+	ZN_TEST_ASSERT(Math::is_equal_approx(generator->generate_single(Vector3i(), VoxelBuffer::CHANNEL_SDF).f, 0.5f));
+
+	// A live edit must not change the already compiled snapshot's stored bounds.
+	script_node->set_parameter_value("bounds_mode", 0);
+	ZN_TEST_ASSERT(Math::is_equal_approx(generator->generate_single(Vector3i(), VoxelBuffer::CHANNEL_SDF).f, 0.5f));
+	ZN_TEST_ASSERT(generator->compile(false).success);
+	ZN_TEST_ASSERT(Math::is_equal_approx(generator->generate_single(Vector3i(), VoxelBuffer::CHANNEL_SDF).f, 1.f));
+
+	script_node->set_parameter_value("bounds_mode", 6);
+	ZN_TEST_ASSERT(generator->compile(false).success);
+	const float non_finite_sample = generator->generate_single(Vector3i(), VoxelBuffer::CHANNEL_SDF).f;
+	ZN_TEST_ASSERT(Math::is_equal_approx(non_finite_sample, -2.f));
+}
+
+void test_voxel_graph_script_texture_2d_rejects_missing_contract() {
+	for (const char *script_path : { SGT_BAD_LAYOUT_SCRIPT_PATH, SGT_MISSING_BOUNDS_SCRIPT_PATH }) {
+		Ref<VoxelGraphScriptNode> script_node;
+		script_node.instantiate();
+		ZN_TEST_ASSERT(script_node->reload_script_contract(script_path));
+		ZN_TEST_ASSERT(script_node->validate());
+		Ref<VoxelGeneratorGraph> generator;
+		generator.instantiate();
+		Ref<VoxelGraphFunction> graph = generator->get_main_function();
+		VoxelGraphFunction &g = **graph;
+		g.clear();
+		const uint32_t n_texture = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D);
+		const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+		g.set_node_param(n_texture, 0, script_node);
+		g.add_connection(n_texture, 0, n_out, 0);
+		ZN_TEST_ASSERT(!generator->compile(false).success);
+		ZN_TEST_ASSERT(!g.get_shader_source().compilation.success);
+	}
+}
+
+void test_voxel_graph_script_texture_2d_persistence_keeps_dynamic_connections() {
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	ZN_TEST_ASSERT(script_node->reload_script_contract(SGT_TEST_SCRIPT_PATH));
+	ZN_TEST_ASSERT(script_node->validate());
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_z = g.create_node(VoxelGraphFunction::NODE_INPUT_Z);
+	const uint32_t n_texture = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_texture, 0, script_node);
+	g.set_node_default_inputs_autoconnect(n_texture, true);
+	g.refresh_node_layout(n_texture);
+	ZN_TEST_ASSERT(g.get_node_default_inputs_autoconnect(n_texture));
+	g.add_connection(n_x, 0, n_texture, 0);
+	g.add_connection(n_z, 0, n_texture, 1);
+	g.add_connection(n_texture, 0, n_out, 0);
+	Ref<VoxelGraphFunction> loaded;
+	loaded.instantiate();
+	ZN_TEST_ASSERT(loaded->load_graph_from_variant_data(g.get_graph_as_variant_data()));
+	const PackedInt32Array node_ids = loaded->get_node_ids();
+	uint32_t loaded_texture = ProgramGraph::NULL_ID;
+	for (int i = 0; i < node_ids.size(); ++i) {
+		if (loaded->get_node_type_id(node_ids[i]) == VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D) {
+			loaded_texture = node_ids[i];
+			break;
+		}
+	}
+	ZN_TEST_ASSERT(loaded_texture != ProgramGraph::NULL_ID);
+	ZN_TEST_ASSERT(loaded->get_node_default_inputs_autoconnect(loaded_texture));
+	ProgramGraph::PortLocation source;
+	ZN_TEST_ASSERT(loaded->try_get_connection_to({ loaded_texture, 0 }, source));
+	ZN_TEST_ASSERT(loaded->get_node_type_id(source.node_id) == VoxelGraphFunction::NODE_INPUT_X);
+	ZN_TEST_ASSERT(loaded->try_get_connection_to({ loaded_texture, 1 }, source));
+	ZN_TEST_ASSERT(loaded->get_node_type_id(source.node_id) == VoxelGraphFunction::NODE_INPUT_Z);
+}
+
+void test_voxel_graph_script_texture_2d_bounds_enable_broad_block_culling() {
+	Ref<VoxelGraphScriptNode> script_node;
+	script_node.instantiate();
+	ZN_TEST_ASSERT(script_node->reload_script_contract(SGT_TEST_SCRIPT_PATH));
+	ZN_TEST_ASSERT(script_node->validate());
+	Ref<VoxelGeneratorGraph> graph;
+	graph.instantiate();
+	Ref<VoxelGraphFunction> function = graph->get_main_function();
+	VoxelGraphFunction &g = **function;
+	const uint32_t n_y = g.create_node(VoxelGraphFunction::NODE_INPUT_Y);
+	const uint32_t n_texture = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH_TEXTURE_2D);
+	const uint32_t n_plane = g.create_node(VoxelGraphFunction::NODE_SDF_PLANE);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_texture, 0, script_node);
+	g.add_connection(n_y, 0, n_plane, 0);
+	g.add_connection(n_texture, 0, n_plane, 1);
+	g.add_connection(n_plane, 0, n_out, 0);
+	ZN_TEST_ASSERT(graph->compile(false).success);
+	VoxelBuffer voxels(VoxelBuffer::ALLOCATOR_DEFAULT);
+	voxels.create(Vector3i(16, 16, 16));
+	for (int lod = 0; lod <= 2; ++lod) {
+		for (int y : { -128, 128 }) {
+			VoxelGenerator::VoxelQueryData query{ voxels, Vector3i(0, y, 0), static_cast<uint8_t>(lod) };
+			ZN_TEST_ASSERT(graph->generate_broad_block(query));
+			ZN_TEST_ASSERT(voxels.get_channel_compression(VoxelBuffer::CHANNEL_SDF) == VoxelBuffer::COMPRESSION_UNIFORM);
+			const float sdf = voxels.get_voxel_f(Vector3i(), VoxelBuffer::CHANNEL_SDF);
+			ZN_TEST_ASSERT(y < 0 ? sdf < 0.f : sdf > 0.f);
+		}
+		VoxelGenerator::VoxelQueryData surface_query{ voxels, Vector3i(), static_cast<uint8_t>(lod) };
+		ZN_TEST_ASSERT(!graph->generate_broad_block(surface_query));
+	}
+	Ref<VoxelGeneratorGraph> legacy_graph;
+	legacy_graph.instantiate();
+	Ref<VoxelGraphFunction> legacy_function = legacy_graph->get_main_function();
+	VoxelGraphFunction &legacy = **legacy_function;
+	const uint32_t legacy_x = legacy.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t legacy_y = legacy.create_node(VoxelGraphFunction::NODE_INPUT_Y);
+	const uint32_t legacy_z = legacy.create_node(VoxelGraphFunction::NODE_INPUT_Z);
+	const uint32_t legacy_sgn = legacy.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t legacy_plane = legacy.create_node(VoxelGraphFunction::NODE_SDF_PLANE);
+	const uint32_t legacy_out = legacy.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	legacy.set_node_param(legacy_sgn, 0, script_node);
+	legacy.add_connection(legacy_x, 0, legacy_sgn, 0);
+	legacy.add_connection(legacy_z, 0, legacy_sgn, 1);
+	legacy.add_connection(legacy_y, 0, legacy_plane, 0);
+	legacy.add_connection(legacy_sgn, 0, legacy_plane, 1);
+	legacy.add_connection(legacy_plane, 0, legacy_out, 0);
+	ZN_TEST_ASSERT(legacy_graph->compile(false).success);
+	for (int lod = 0; lod <= 2; ++lod) {
+		for (int y : { -128, 128 }) {
+			VoxelGenerator::VoxelQueryData legacy_query{ voxels, Vector3i(0, y, 0), static_cast<uint8_t>(lod) };
+			ZN_TEST_ASSERT(!legacy_graph->generate_broad_block(legacy_query));
+		}
+	}
+}
+
+void test_voxel_graph_script_node_debug_compile_does_not_emit_changed() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+
+	Ref<VoxelGeneratorGraph> generator;
+	generator.instantiate();
+	Ref<VoxelGraphFunction> graph = generator->get_main_function();
+	VoxelGraphFunction &g = **graph;
+	g.clear();
+
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = create_test_script_graph_node(g, script_node);
+	const uint32_t n_preview = g.create_node(VoxelGraphFunction::NODE_SDF_PREVIEW);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 1.5f);
+	g.add_connection(n_sgn, 0, n_preview, 0);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	SignalCounter changed_counter;
+	graph->connect(VoxelStringNames::get_singleton().changed, callable_mp(&changed_counter, &SignalCounter::increment));
+
+	script_node->set_parameter_value("gain", 2.5f);
+	changed_counter.count = 0;
+
+	pg::CompilationResult result = generator->compile(true);
+	ZN_TEST_ASSERT_MSG(
+			result.success,
+			String("Failed to compile graph: {0}: {1}").format(varray(result.node_id, result.message))
+	);
+	ZN_TEST_ASSERT_MSG(
+			changed_counter.count == 0,
+			"Debug compilation for previews must not emit graph `changed`, or preview refreshes can reschedule themselves."
+	);
+}
+
+void test_voxel_graph_script_node_port_refresh() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_sgn = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_sgn, 0, script_node);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.set_node_default_input(n_sgn, 1, 7.f);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	script_node->clear_inputs();
+	script_node->add_input("bias");
+	script_node->add_input("x");
+	g.refresh_node_layout(n_sgn);
+
+	ZN_TEST_ASSERT(g.get_node_input_count(n_sgn) == 2);
+	ZN_TEST_ASSERT(g.get_node_input_index(n_sgn, "bias") == 0);
+	ZN_TEST_ASSERT(g.get_node_input_index(n_sgn, "x") == 1);
+	ZN_TEST_ASSERT(g.get_node_output_index(n_sgn, "sdf") == 0);
+
+	ProgramGraph::PortLocation src;
+	ZN_TEST_ASSERT(g.try_get_connection_to({ n_sgn, 1 }, src));
+	ZN_TEST_ASSERT(src.node_id == n_x);
+	ZN_TEST_ASSERT(src.port_index == 0);
+	ZN_TEST_ASSERT(!g.try_get_connection_to({ n_sgn, 0 }, src));
+	ZN_TEST_ASSERT(g.try_get_connection_to({ n_out, 0 }, src));
+	ZN_TEST_ASSERT(src.node_id == n_sgn);
+	ZN_TEST_ASSERT(src.port_index == 0);
+}
+
+void test_voxel_graph_script_node_copy_keeps_connections_after_reload() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	VoxelGraphFunction &g = **graph;
+	const uint32_t n_x = g.create_node(VoxelGraphFunction::NODE_INPUT_X);
+	const uint32_t n_constant = g.create_node(VoxelGraphFunction::NODE_CONSTANT);
+	const uint32_t n_sgn = g.create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	const uint32_t n_out = g.create_node(VoxelGraphFunction::NODE_OUTPUT_SDF);
+	g.set_node_param(n_constant, 0, 2.f);
+	g.set_node_param(n_sgn, 0, script_node);
+	g.add_connection(n_x, 0, n_sgn, 0);
+	g.add_connection(n_constant, 0, n_sgn, 1);
+	g.add_connection(n_sgn, 0, n_out, 0);
+
+	StdVector<uint32_t> copied_node_ids;
+	copied_node_ids.push_back(n_x);
+	copied_node_ids.push_back(n_constant);
+	copied_node_ids.push_back(n_sgn);
+	copied_node_ids.push_back(n_out);
+
+	Ref<VoxelGraphFunction> copy;
+	copy.instantiate();
+	g.duplicate_subgraph(to_span(copied_node_ids), Span<const uint32_t>(), **copy, Vector2());
+
+	Ref<VoxelGraphFunction> loaded_copy;
+	loaded_copy.instantiate();
+	ZN_TEST_ASSERT(loaded_copy->load_graph_from_variant_data(copy->get_graph_as_variant_data()));
+
+	PackedInt32Array pasted_node_ids = loaded_copy->get_node_ids();
+	uint32_t pasted_sgn_id = ProgramGraph::NULL_ID;
+	for (int i = 0; i < pasted_node_ids.size(); ++i) {
+		const uint32_t node_id = pasted_node_ids[i];
+		if (loaded_copy->get_node_type_id(node_id) == VoxelGraphFunction::NODE_SCRIPT_GRAPH) {
+			pasted_sgn_id = node_id;
+			break;
+		}
+	}
+	ZN_TEST_ASSERT(pasted_sgn_id != ProgramGraph::NULL_ID);
+
+	unsigned int bias_input_index;
+	ZN_TEST_ASSERT(loaded_copy->get_node_input_index_by_name(pasted_sgn_id, "bias", bias_input_index));
+
+	ProgramGraph::PortLocation src;
+	ZN_TEST_ASSERT(loaded_copy->try_get_connection_to({ pasted_sgn_id, 0 }, src));
+	ZN_TEST_ASSERT(loaded_copy->try_get_connection_to({ pasted_sgn_id, bias_input_index }, src));
+	ZN_TEST_ASSERT(loaded_copy->get_node_type_id(src.node_id) == VoxelGraphFunction::NODE_CONSTANT);
+}
+
+#ifdef TOOLS_ENABLED
+void test_voxel_graph_sgn_inspector_hides_validation_properties() {
+	Ref<VoxelGraphScriptNode> script_node = load_test_script_graph_node();
+	script_node->set_shader_path("res://tests/missing_sgn_shader.glsl");
+	ZN_TEST_ASSERT(script_node->validate());
+	ZN_TEST_ASSERT(script_node->get_validation_warnings().size() > 0);
+
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+	const uint32_t n_sgn = create_test_script_graph_node(**graph, script_node);
+
+	VoxelGraphEditor *editor = memnew(VoxelGraphEditor);
+	editor->set_graph(graph);
+
+	Ref<VoxelGraphNodeInspectorWrapper> wrapper;
+	wrapper.instantiate();
+	wrapper->setup(n_sgn, editor);
+
+	StdVector<zylann::godot::PropertyInfoWrapper> properties;
+	zylann::godot::get_property_list(**wrapper, properties);
+	for (const zylann::godot::PropertyInfoWrapper &property : properties) {
+		ZN_TEST_ASSERT(property.name != "validation_errors");
+		ZN_TEST_ASSERT(property.name != "validation_warnings");
+	}
+
+	wrapper->detach_from_graph_editor();
+	memdelete(editor);
+}
+
+void test_voxel_graph_editor_create_dynamic_layout_node() {
+	Ref<VoxelGraphFunction> graph;
+	graph.instantiate();
+
+	VoxelGraphEditor *editor = memnew(VoxelGraphEditor);
+	editor->set_graph(graph);
+
+#ifdef ZN_GODOT
+	ErrorDetector error_detector;
+#endif
+
+	const uint32_t first_node_id = graph->create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	ZN_TEST_ASSERT(first_node_id != ProgramGraph::NULL_ID);
+#ifdef ZN_GODOT
+	ZN_TEST_ASSERT(!error_detector.has_error);
+#endif
+
+	editor->call("create_node_gui", first_node_id);
+	graph->remove_node(first_node_id);
+	editor->call("remove_node_gui", StringName(String::num_uint64(first_node_id)));
+
+#ifdef ZN_GODOT
+	error_detector.clear();
+#endif
+	const uint32_t second_node_id = graph->create_node(VoxelGraphFunction::NODE_SCRIPT_GRAPH);
+	ZN_TEST_ASSERT(second_node_id != ProgramGraph::NULL_ID);
+#ifdef ZN_GODOT
+	ZN_TEST_ASSERT(!error_detector.has_error);
+#endif
+
+	editor->call("create_node_gui", second_node_id);
+	graph->remove_node(second_node_id);
+	editor->call("remove_node_gui", StringName(String::num_uint64(second_node_id)));
+
+	memdelete(editor);
+}
+#endif
 
 } // namespace zylann::voxel::tests

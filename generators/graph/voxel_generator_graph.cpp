@@ -637,6 +637,7 @@ void fill_zx_integer_slice(
 } // namespace
 
 VoxelGenerator::Result VoxelGeneratorGraph::generate_block(VoxelGenerator::VoxelQueryData input) {
+	ZN_PROFILE_SCOPE_NAMED("VoxelGeneratorGraph::generate_block");
 	std::shared_ptr<Runtime> runtime_ptr;
 	{
 		RWLockRead rlock(_runtime_lock);
@@ -988,6 +989,7 @@ VoxelGenerator::Result VoxelGeneratorGraph::generate_block(VoxelGenerator::Voxel
 }
 
 bool VoxelGeneratorGraph::generate_broad_block(VoxelGenerator::VoxelQueryData input) {
+	ZN_PROFILE_SCOPE_NAMED("VoxelGeneratorGraph::generate_broad_block");
 	// This is a reduced version of what `generate_block` does already, so it can be used before scheduling GPU work.
 	// If range analysis and SDF clipping finds that we don't need to generate the full block, we can get away with the
 	// broad result. If any channel cannot be determined this way, we have to perform full generation.
@@ -1323,6 +1325,16 @@ pg::CompilationResult VoxelGeneratorGraph::compile(bool debug) {
 #endif
 
 	return result;
+}
+
+void VoxelGeneratorGraph::request_regeneration() {
+	const pg::CompilationResult result = compile(Engine::get_singleton()->is_editor_hint());
+	if (!result.success) {
+		ERR_PRINT(String("Graph compilation failed before regeneration: {0}").format(varray(result.message)));
+		return;
+	}
+
+	VoxelGenerator::request_regeneration();
 }
 
 // This is an external API which involves locking so better not use this internally
