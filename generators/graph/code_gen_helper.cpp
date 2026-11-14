@@ -64,7 +64,7 @@ void CodeGenHelper::add(int x) {
 }
 
 void CodeGenHelper::require_lib_code(const char *lib_name, const char *code) {
-	auto p = _included_libs.insert(lib_name);
+	auto p = _included_libs.insert(StdString(lib_name));
 	if (p.second) {
 		_lib_code += "\n\n";
 		_lib_code += code;
@@ -75,7 +75,7 @@ void CodeGenHelper::require_lib_code(const char *lib_name, const char *code) {
 // Some code can be too big to fit in a single literal depending on the compiler,
 // so an option is to provide it as a zero-terminated array of string literals
 void CodeGenHelper::require_lib_code(const char *lib_name, const char **code) {
-	auto p = _included_libs.insert(lib_name);
+	auto p = _included_libs.insert(StdString(lib_name));
 	if (p.second) {
 		_lib_code += "\n\n";
 		while (*code != 0) {

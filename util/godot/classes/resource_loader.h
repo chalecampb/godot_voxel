@@ -12,6 +12,7 @@ namespace zylann::godot {
 
 PackedStringArray get_recognized_extensions_for_type(const String &type_name);
 Ref<Resource> load_resource(const String &path);
+Ref<Resource> reload_resource(const String &path);
 
 } // namespace zylann::godot
 

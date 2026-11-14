@@ -67,7 +67,7 @@ private:
 	StdString _lib_code;
 	unsigned int _indent_level = 0;
 	unsigned int _next_var_name_id = 0;
-	StdUnorderedSet<const char *> _included_libs;
+	StdUnorderedSet<StdString> _included_libs;
 	bool _newline = true;
 };
 
