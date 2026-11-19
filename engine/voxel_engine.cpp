@@ -74,18 +74,17 @@ VoxelEngine::VoxelEngine(Config config) {
 }
 
 VoxelEngine::~VoxelEngine() {
-#ifdef VOXEL_ENABLE_GPU
-	// The GPU runner hands meshing tasks it was holding back to the general pool when it completes or interrupts them.
-	// It must be stopped first, otherwise some tasks could be added after the general pool was cleared.
-	_gpu_task_runner.stop();
-#endif
-
 	// The GDScriptLanguage singleton can get destroyed before ours, so any script referenced by tasks
 	// cannot be freed. To work this around, tasks are cleared when the scene tree autoload is destroyed.
 	// So normally there should not be any task left to clear here,
 	// but doing it anyways for correctness, it's how it should have been...
 	// See https://github.com/Zylann/godot_voxel/issues/189
 	wait_and_clear_all_tasks(true);
+
+#ifdef VOXEL_ENABLE_GPU
+	// Stopped after the general pool is done: tasks waiting on a compute shader compilation need the GPU runner alive.
+	_gpu_task_runner.stop();
+#endif
 
 	// Main thread tasks can still be pending, for example if the game quits right after terrains unloaded some
 	// blocks. Flush them explicitly instead of relying on member destruction order, because tasks of one runner can
