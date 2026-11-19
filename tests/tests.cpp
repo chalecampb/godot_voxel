@@ -148,6 +148,8 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_slot_map);
 	VOXEL_TEST(test_box_blur);
 	VOXEL_TEST(test_threaded_task_postponing);
+	VOXEL_TEST(test_threaded_task_runner_cancelled_postponed_tasks);
+	VOXEL_TEST(test_threaded_task_runner_postponed_tasks_follow_priority_cancellation);
 	VOXEL_TEST(test_spatial_lock_misc);
 	VOXEL_TEST(test_spatial_lock_spam);
 	VOXEL_TEST(test_spatial_lock_dependent_map_chunks);

@@ -197,6 +197,14 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 				}
 			}
 
+			// Postponed tasks are not part of the prioritized list, so nothing else refreshes their priority. Tasks which
+			// only find out they are no longer needed when their priority is evaluated (for example when no viewer
+			// requires them anymore) would otherwise stay postponed forever. This also lets cancellation reach them
+			// right below.
+			for (TaskItem &item : tasks) {
+				item.cached_priority = item.task->get_priority();
+			}
+
 			{
 				// TODO When tasks are very short and there are a lot of tasks, one thread can monopolize this mutex.
 				//
@@ -329,7 +337,12 @@ void ThreadedTaskRunner::thread_func(ThreadData &data) {
 			for (size_t i = 0; i < tasks.size(); ++i) {
 				TaskItem &item = tasks[i];
 
-				if (!item.task->is_cancelled()) {
+				if (item.task->is_cancelled()) {
+					// A task picked from the postponed list still carries the postponed status it was given when it
+					// last ran. A cancelled task does not run again, so it must complete, otherwise it would be
+					// postponed forever and block anything waiting for all tasks to be picked (like terrain destruction).
+					item.status = ThreadedTaskContext::STATUS_COMPLETE;
+				} else {
 					ThreadedTaskContext ctx(data.index, item.cached_priority);
 					data.debug_running_task_name = item.task->get_debug_name();
 					item.task->run(ctx);

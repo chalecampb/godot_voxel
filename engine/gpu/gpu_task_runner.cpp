@@ -218,7 +218,10 @@ void GPUTaskRunner::thread_func() {
 		MutexLock mlock(_mutex);
 		for (IGPUTask *task : _shared_tasks) {
 			ZN_DELETE(task);
+			--_pending_count;
 		}
+		// Must be emptied, otherwise the destructor of this runner deletes these tasks a second time.
+		_shared_tasks.clear();
 	}
 
 	_base_resources.clear(*_rendering_device);
