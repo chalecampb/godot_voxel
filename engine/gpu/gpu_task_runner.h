@@ -83,6 +83,7 @@ public:
 
 private:
 	void thread_func();
+	void delete_shared_tasks();
 
 	RenderingDevice *_rendering_device = nullptr;
 	// mutable Mutex _rendering_device_ptr_mutex;

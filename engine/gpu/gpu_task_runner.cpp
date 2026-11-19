@@ -19,8 +19,26 @@ GPUTaskRunner::~GPUTaskRunner() {
 
 	// There shouldn't be any tasks at this point, we delete them in the thread before destroying the RenderingDevice.
 	// But in theory nothing prevents tasks from being added yet after that...
-	for (IGPUTask *task : _shared_tasks) {
-		ZN_DELETE(task);
+	delete_shared_tasks();
+}
+
+void GPUTaskRunner::delete_shared_tasks() {
+	// Deleting a task can release the last reference to a compute shader, which pushes a task to free it. So the
+	// vector must not be iterated while deleting, and the loop runs until nothing new shows up.
+	while (true) {
+		StdVector<IGPUTask *> tasks;
+		{
+			MutexLock mlock(_mutex);
+			tasks = std::move(_shared_tasks);
+			_shared_tasks.clear();
+		}
+		if (tasks.size() == 0) {
+			break;
+		}
+		for (IGPUTask *task : tasks) {
+			ZN_DELETE(task);
+			--_pending_count;
+		}
 	}
 }
 
@@ -214,12 +232,7 @@ void GPUTaskRunner::thread_func() {
 		godot::free_rendering_device_rid(*_rendering_device, shared_output_storage_buffer_rid);
 	}
 
-	{
-		MutexLock mlock(_mutex);
-		for (IGPUTask *task : _shared_tasks) {
-			ZN_DELETE(task);
-		}
-	}
+	delete_shared_tasks();
 
 	_base_resources.clear(*_rendering_device);
 

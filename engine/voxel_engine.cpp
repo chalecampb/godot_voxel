@@ -82,6 +82,7 @@ VoxelEngine::~VoxelEngine() {
 	wait_and_clear_all_tasks(true);
 
 #ifdef VOXEL_ENABLE_GPU
+	// Stopped after the general pool is done: tasks waiting on a compute shader compilation need the GPU runner alive.
 	_gpu_task_runner.stop();
 #endif
 
@@ -172,15 +173,20 @@ void VoxelEngine::try_initialize_gpu_features() {
 void VoxelEngine::wait_and_clear_all_tasks(bool warn) {
 	_general_thread_pool.wait_for_all_tasks();
 
-	_general_thread_pool.dequeue_completed_tasks([warn](zylann::IThreadedTask *task) {
-		if (warn) {
-			ZN_PRINT_WARNING(
-					"General tasks remain on module cleanup, "
-					"this could become a problem if they reference scripts"
-			);
-		}
+	unsigned int remaining_count = 0;
+	_general_thread_pool.dequeue_completed_tasks([&remaining_count](zylann::IThreadedTask *task) {
+		++remaining_count;
 		ZN_DELETE(task);
 	});
+
+	if (warn && remaining_count > 0) {
+		// A single message, there can be thousands of tasks when quitting while terrains are busy
+		ZN_PRINT_WARNING(format(
+				"{} general tasks remain on module cleanup, "
+				"this could become a problem if they reference scripts",
+				remaining_count
+		));
+	}
 }
 
 VolumeID VoxelEngine::add_volume(VolumeCallbacks callbacks) {
