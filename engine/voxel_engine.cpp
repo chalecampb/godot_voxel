@@ -74,16 +74,18 @@ VoxelEngine::VoxelEngine(Config config) {
 }
 
 VoxelEngine::~VoxelEngine() {
+#ifdef VOXEL_ENABLE_GPU
+	// The GPU runner hands meshing tasks it was holding back to the general pool when it completes or interrupts them.
+	// It must be stopped first, otherwise some tasks could be added after the general pool was cleared.
+	_gpu_task_runner.stop();
+#endif
+
 	// The GDScriptLanguage singleton can get destroyed before ours, so any script referenced by tasks
 	// cannot be freed. To work this around, tasks are cleared when the scene tree autoload is destroyed.
 	// So normally there should not be any task left to clear here,
 	// but doing it anyways for correctness, it's how it should have been...
 	// See https://github.com/Zylann/godot_voxel/issues/189
 	wait_and_clear_all_tasks(true);
-
-#ifdef VOXEL_ENABLE_GPU
-	_gpu_task_runner.stop();
-#endif
 
 	// Main thread tasks can still be pending, for example if the game quits right after terrains unloaded some
 	// blocks. Flush them explicitly instead of relying on member destruction order, because tasks of one runner can
@@ -172,15 +174,20 @@ void VoxelEngine::try_initialize_gpu_features() {
 void VoxelEngine::wait_and_clear_all_tasks(bool warn) {
 	_general_thread_pool.wait_for_all_tasks();
 
-	_general_thread_pool.dequeue_completed_tasks([warn](zylann::IThreadedTask *task) {
-		if (warn) {
-			ZN_PRINT_WARNING(
-					"General tasks remain on module cleanup, "
-					"this could become a problem if they reference scripts"
-			);
-		}
+	unsigned int remaining_count = 0;
+	_general_thread_pool.dequeue_completed_tasks([&remaining_count](zylann::IThreadedTask *task) {
+		++remaining_count;
 		ZN_DELETE(task);
 	});
+
+	if (warn && remaining_count > 0) {
+		// A single message, there can be thousands of tasks when quitting while terrains are busy
+		ZN_PRINT_WARNING(format(
+				"{} general tasks remain on module cleanup, "
+				"this could become a problem if they reference scripts",
+				remaining_count
+		));
+	}
 }
 
 VolumeID VoxelEngine::add_volume(VolumeCallbacks callbacks) {

@@ -592,10 +592,12 @@ void uninitialize_voxel_module(ModuleInitializationLevel p_level) {
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
 		VoxelMesherTransvoxel::free_static_resources();
 #endif
+		zylann::voxel::godot::VoxelEngine::destroy_singleton();
+		// Destroying the engine releases tasks which were still queued or interrupted at exit. Their resources (such as
+		// generators) can use string names and graph node types while they are destroyed, so these must outlive it.
+		VoxelEngine::destroy_singleton();
 		VoxelStringNames::destroy_singleton();
 		pg::NodeTypeDB::destroy_singleton();
-		zylann::voxel::godot::VoxelEngine::destroy_singleton();
-		VoxelEngine::destroy_singleton();
 
 		// Do this last as VoxelEngine might still be holding some refs to voxel blocks
 		VoxelMemoryPool::destroy_singleton();
