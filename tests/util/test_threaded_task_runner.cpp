@@ -461,4 +461,160 @@ void test_threaded_task_postponing() {
 #endif
 }
 
+namespace {
+
+// A task that is postponed on every run (like a meshing task waiting for a shader to compile) until it is released.
+class PostponedTestTask : public IThreadedTask {
+public:
+	struct Group {
+		std::atomic_bool cancelled = { false };
+		std::atomic_bool released = { false };
+		std::atomic_uint32_t run_count = { 0 };
+		std::atomic_uint32_t completed_runs = { 0 };
+		// When true, cancellation is only discovered through `get_priority()`, like tasks which drop themselves when
+		// no viewer needs them anymore.
+		bool cancel_through_priority = false;
+	};
+
+	PostponedTestTask(std::shared_ptr<Group> p_group) : _group(p_group) {}
+
+	void run(ThreadedTaskContext &ctx) override {
+		++_group->run_count;
+		if (!_group->released) {
+			ctx.status = ThreadedTaskContext::STATUS_POSTPONED;
+			Thread::sleep_usec(50);
+			return;
+		}
+		++_group->completed_runs;
+	}
+
+	TaskPriority get_priority() override {
+		if (_group->cancel_through_priority) {
+			_cancelled_by_priority = _group->cancelled;
+		}
+		return TaskPriority::max();
+	}
+
+	bool is_cancelled() override {
+		if (_group->cancel_through_priority) {
+			return _cancelled_by_priority;
+		}
+		return _group->cancelled;
+	}
+
+private:
+	std::shared_ptr<Group> _group;
+	bool _cancelled_by_priority = false;
+};
+
+bool wait_until_no_remaining_tasks(const ThreadedTaskRunner &runner, uint32_t timeout_msec) {
+	const uint32_t begin = Time::get_singleton()->get_ticks_msec();
+	while (runner.get_debug_remaining_tasks() != 0) {
+		if (Time::get_singleton()->get_ticks_msec() - begin > timeout_msec) {
+			return false;
+		}
+		Thread::sleep_usec(1000);
+	}
+	return true;
+}
+
+unsigned int delete_completed_tasks(ThreadedTaskRunner &runner) {
+	unsigned int count = 0;
+	runner.dequeue_completed_tasks([&count](IThreadedTask *task) {
+		ZN_DELETE(task);
+		++count;
+	});
+	return count;
+}
+
+} // namespace
+
+// Requirements: WRLD-08 (terrain free does not wait for queued work).
+// Tasks which were postponed and then cancelled must leave the runner instead of being postponed forever. A group of
+// unrelated tasks sharing the runner must be unaffected.
+void test_threaded_task_runner_cancelled_postponed_tasks() {
+	const unsigned int cancelled_count = 3000;
+	const unsigned int kept_count = 8;
+
+	std::shared_ptr<PostponedTestTask::Group> cancelled_group = make_shared_instance<PostponedTestTask::Group>();
+	std::shared_ptr<PostponedTestTask::Group> kept_group = make_shared_instance<PostponedTestTask::Group>();
+
+	ThreadedTaskRunner runner;
+	runner.set_thread_count(4);
+	runner.set_name("TestCancelPostponed");
+
+	for (unsigned int i = 0; i < cancelled_count; ++i) {
+		runner.enqueue(ZN_NEW(PostponedTestTask(cancelled_group)), false);
+	}
+	for (unsigned int i = 0; i < kept_count; ++i) {
+		runner.enqueue(ZN_NEW(PostponedTestTask(kept_group)), false);
+	}
+
+	// Let every task be picked and postponed at least once
+	const uint32_t begin = Time::get_singleton()->get_ticks_msec();
+	while (cancelled_group->run_count < cancelled_count) {
+		ZN_TEST_ASSERT_MSG(Time::get_singleton()->get_ticks_msec() - begin < 20000, "Tasks were not picked");
+		Thread::sleep_usec(1000);
+	}
+
+	cancelled_group->cancelled = true;
+
+	// Only the other group remains, which keeps being postponed
+	const uint32_t begin2 = Time::get_singleton()->get_ticks_msec();
+	while (runner.get_debug_remaining_tasks() != kept_count) {
+		if (Time::get_singleton()->get_ticks_msec() - begin2 > 10000) {
+			break;
+		}
+		Thread::sleep_usec(1000);
+	}
+	// Fails here, before waiting for tasks which would never complete
+	ZN_TEST_ASSERT_MSG(runner.get_debug_remaining_tasks() == kept_count, "Cancelled postponed tasks must leave the runner");
+
+	// Release the tasks of the group which was not cancelled so the runner can finish
+	kept_group->released = true;
+	const bool drained = wait_until_no_remaining_tasks(runner, 10000);
+	ZN_TEST_ASSERT(drained);
+	runner.wait_for_all_tasks();
+	const unsigned int completed = delete_completed_tasks(runner);
+
+	ZN_TEST_ASSERT(completed == cancelled_count + kept_count);
+	ZN_TEST_ASSERT_MSG(kept_group->completed_runs == kept_count, "Tasks of another group must still complete");
+	ZN_TEST_ASSERT_MSG(cancelled_group->completed_runs == 0, "Cancelled tasks must not run again");
+}
+
+// Requirements: WRLD-08 (blocks no viewer requests are dropped before they run).
+// Postponed tasks must have their priority refreshed, so that tasks which only notice they are no longer needed when
+// priority is evaluated are dropped too.
+void test_threaded_task_runner_postponed_tasks_follow_priority_cancellation() {
+	const unsigned int task_count = 500;
+
+	std::shared_ptr<PostponedTestTask::Group> group = make_shared_instance<PostponedTestTask::Group>();
+	group->cancel_through_priority = true;
+
+	ThreadedTaskRunner runner;
+	runner.set_thread_count(4);
+	runner.set_name("TestPriorityPostponed");
+
+	for (unsigned int i = 0; i < task_count; ++i) {
+		runner.enqueue(ZN_NEW(PostponedTestTask(group)), false);
+	}
+
+	const uint32_t begin = Time::get_singleton()->get_ticks_msec();
+	while (group->run_count < task_count) {
+		ZN_TEST_ASSERT_MSG(Time::get_singleton()->get_ticks_msec() - begin < 20000, "Tasks were not picked");
+		Thread::sleep_usec(1000);
+	}
+
+	group->cancelled = true;
+
+	// Fails here, before waiting for tasks which would never complete
+	const bool drained = wait_until_no_remaining_tasks(runner, 10000);
+	ZN_TEST_ASSERT_MSG(drained, "Postponed tasks which are no longer needed must leave the runner");
+	runner.wait_for_all_tasks();
+	const unsigned int completed = delete_completed_tasks(runner);
+
+	ZN_TEST_ASSERT(completed == task_count);
+	ZN_TEST_ASSERT(group->completed_runs == 0);
+}
+
 } // namespace zylann::tests
