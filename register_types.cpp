@@ -40,6 +40,7 @@
 #include "terrain/fixed_lod/voxel_terrain.h"
 #include "terrain/fixed_lod/voxel_terrain_multiplayer_synchronizer.h"
 #include "terrain/variable_lod/voxel_lod_terrain.h"
+#include "terrain/variable_lod/collision_segment_coverage.h"
 #include "terrain/voxel_a_star_grid_3d.h"
 #include "terrain/voxel_mesh_block.h"
 #include "terrain/voxel_save_completion_tracker.h"
@@ -294,6 +295,7 @@ void initialize_voxel_module(ModuleInitializationLevel p_level) {
 		ClassDB::register_abstract_class<VoxelNode>();
 		ClassDB::register_class<VoxelTerrain>();
 		ClassDB::register_class<VoxelLodTerrain>();
+		ClassDB::register_class<CollisionSegmentCoverage>();
 		ClassDB::register_class<VoxelViewer>();
 
 		// Streams
