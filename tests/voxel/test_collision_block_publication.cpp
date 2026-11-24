@@ -7,6 +7,7 @@ namespace zylann::voxel::tests {
 using Publication = CollisionBlockPublication;
 using PublicationState = Publication::State;
 
+// Requirements: WRLD-10, WRLD-17, WRLD-21
 void test_collision_block_publication_default_and_queued_work() {
 	Publication publication;
 	ZN_TEST_ASSERT(publication.get_ticket() == 0);
@@ -17,6 +18,7 @@ void test_collision_block_publication_default_and_queued_work() {
 	ZN_TEST_ASSERT(publication.get_state() == PublicationState::UNAVAILABLE);
 }
 
+// Requirements: WRLD-10, WRLD-17, WRLD-21
 void test_collision_block_publication_rejects_zero_and_wrong_tickets() {
 	Publication publication;
 	publication.begin_request(7);
@@ -33,6 +35,7 @@ void test_collision_block_publication_rejects_zero_and_wrong_tickets() {
 	ZN_TEST_ASSERT(publication.get_state() == PublicationState::UNAVAILABLE);
 }
 
+// Requirements: WRLD-10, WRLD-17, WRLD-21
 void test_collision_block_publication_exact_empty_and_duplicate() {
 	Publication publication;
 	publication.begin_request(11);
@@ -45,6 +48,7 @@ void test_collision_block_publication_exact_empty_and_duplicate() {
 	ZN_TEST_ASSERT(publication.get_state() == PublicationState::EMPTY);
 }
 
+// Requirements: WRLD-10, WRLD-17, WRLD-21
 void test_collision_block_publication_exact_body_after_completion() {
 	Publication publication;
 	publication.begin_request(13);
@@ -56,6 +60,7 @@ void test_collision_block_publication_exact_body_after_completion() {
 	ZN_TEST_ASSERT(publication.get_state() == PublicationState::BODY);
 }
 
+// Requirements: WRLD-10, WRLD-17, WRLD-21
 void test_collision_block_publication_edit_invalidates_late_completion() {
 	Publication publication;
 	publication.begin_request(17);
@@ -70,6 +75,7 @@ void test_collision_block_publication_edit_invalidates_late_completion() {
 	ZN_TEST_ASSERT(publication.get_state() == PublicationState::UNAVAILABLE);
 }
 
+// Requirements: WRLD-10, WRLD-17, WRLD-21
 void test_collision_block_publication_clear_and_reuse() {
 	Publication publication;
 	publication.begin_request(23);
@@ -86,6 +92,7 @@ void test_collision_block_publication_clear_and_reuse() {
 	ZN_TEST_ASSERT(publication.get_state() == PublicationState::EMPTY);
 }
 
+// Requirements: WRLD-10, WRLD-17, WRLD-21
 void test_collision_block_publication_preserves_unaffected_block() {
 	Publication edited_block;
 	Publication unaffected_block;
