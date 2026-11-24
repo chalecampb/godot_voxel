@@ -2,6 +2,8 @@
 #define VOXEL_COLLISION_SEGMENT_COVERAGE_H
 
 #include "../../util/godot/core/vector3.h"
+#include "../../util/godot/classes/ref_counted.h"
+#include "../../util/godot/core/class_db.h"
 
 #include <cmath>
 #include <cstdint>
@@ -9,7 +11,8 @@
 namespace zylann::voxel {
 
 // Geometry and query-bound helpers shared by VoxelLodTerrain's nonblocking coverage query.
-class CollisionSegmentCoverage {
+class CollisionSegmentCoverage : public RefCounted {
+	GDCLASS(CollisionSegmentCoverage, RefCounted)
 public:
 	enum Status : uint8_t {
 		COLLISION_SEGMENT_READY,
@@ -18,6 +21,29 @@ public:
 		COLLISION_SEGMENT_INVALID,
 		COLLISION_SEGMENT_UNSUPPORTED
 	};
+
+	Status status = COLLISION_SEGMENT_UNAVAILABLE;
+	unsigned int leaf_count = 0;
+
+	Status get_status() const {
+		return status;
+	}
+
+	unsigned int get_leaf_count() const {
+		return leaf_count;
+	}
+
+	static void _bind_methods() {
+		ClassDB::bind_method(D_METHOD("get_status"), &CollisionSegmentCoverage::get_status);
+		ClassDB::bind_method(D_METHOD("get_leaf_count"), &CollisionSegmentCoverage::get_leaf_count);
+		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_READY);
+		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_UNAVAILABLE);
+		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_OVER_BUDGET);
+		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_INVALID);
+		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_UNSUPPORTED);
+		ADD_PROPERTY(PropertyInfo(Variant::INT, "status"), "", "get_status");
+		ADD_PROPERTY(PropertyInfo(Variant::INT, "leaf_count"), "", "get_leaf_count");
+	}
 
 	static bool is_valid_query(const Vector3 &from, const Vector3 &to, unsigned int max_leaves) {
 		return is_finite(from) && is_finite(to) && max_leaves > 0 && max_leaves <= 32;
@@ -66,5 +92,7 @@ private:
 };
 
 } // namespace zylann::voxel
+
+VARIANT_ENUM_CAST(zylann::voxel::CollisionSegmentCoverage::Status)
 
 #endif // VOXEL_COLLISION_SEGMENT_COVERAGE_H
