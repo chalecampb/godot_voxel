@@ -136,6 +136,7 @@ void run_voxel_tests(const testing::TestOptions &options) {
 VOXEL_TEST(test_collision_block_result_selection_preserves_current_over_stale_arrival);
 VOXEL_TEST(test_collision_segment_coverage_closed_intersections);
 VOXEL_TEST(test_collision_segment_coverage_rejects_invalid_and_over_budget_inputs);
+VOXEL_TEST(test_collision_segment_coverage_default_status_is_unavailable);
 	VOXEL_TEST(test_block_serializer_stream_peer);
 	VOXEL_TEST(test_region_file);
 	VOXEL_TEST(test_voxel_stream_region_files);

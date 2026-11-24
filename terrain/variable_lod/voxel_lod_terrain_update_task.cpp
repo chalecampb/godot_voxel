@@ -304,6 +304,34 @@ void send_mesh_requests(
 	ZN_ASSERT(data_ptr != nullptr);
 	const VoxelData &data = *data_ptr;
 
+	// Stamp the whole pending batch while both edit queues are known to be drained.
+	// If an edit arrives after these locks are released, its publisher clears the affected ticket before
+	// adding the dirty notification. Keep the pending vectors intact when either queue still has work.
+	{
+		MutexLock edit_lock(state.edit_notifications.mutex);
+		MutexLock generated_lock(state.changed_generated_areas_mutex);
+		if (state.edit_notifications.edited_voxel_areas_lod0.size() != 0 || state.changed_generated_areas.size() != 0) {
+			return;
+		}
+		const unsigned int pending_lod_count = data.get_lod_count();
+		for (unsigned int lod_index = 0; lod_index < pending_lod_count; ++lod_index) {
+			VoxelLodTerrainUpdateData::Lod &lod = state.lods[lod_index];
+			for (VoxelLodTerrainUpdateData::MeshToUpdate &mesh_to_update : lod.mesh_blocks_pending_update) {
+				auto mesh_block_it = lod.mesh_map_state.map.find(mesh_to_update.position);
+				if (mesh_block_it == lod.mesh_map_state.map.end()) {
+					continue;
+				}
+				VoxelLodTerrainUpdateData::MeshBlockState &mesh_block = mesh_block_it->second;
+				mesh_to_update.collision_request_ticket = 0;
+				if (settings.streaming_system == VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX &&
+						settings.collision_enabled && mesh_block.collision_viewers.get() > 0) {
+					mesh_to_update.collision_request_ticket = state.collision_request_tickets.issue();
+				}
+				mesh_block.expected_collision_ticket.store(mesh_to_update.collision_request_ticket);
+			}
+		}
+	}
+
 	const int data_block_size = data.get_block_size();
 	const int mesh_block_size = 1 << settings.mesh_block_size_po2;
 	const int render_to_data_factor = mesh_block_size / data_block_size;
@@ -315,7 +343,7 @@ void send_mesh_requests(
 
 		for (unsigned int bi = 0; bi < lod.mesh_blocks_pending_update.size(); ++bi) {
 			ZN_PROFILE_SCOPE();
-			const VoxelLodTerrainUpdateData::MeshToUpdate &mesh_to_update = lod.mesh_blocks_pending_update[bi];
+			VoxelLodTerrainUpdateData::MeshToUpdate &mesh_to_update = lod.mesh_blocks_pending_update[bi];
 
 			auto mesh_block_it = lod.mesh_map_state.map.find(mesh_to_update.position);
 			// A block must have been allocated before we ask for a mesh update
@@ -339,11 +367,7 @@ void send_mesh_requests(
 			task->data = data_ptr;
 			task->require_visual = mesh_to_update.require_visual;
 			task->collision_hint = settings.collision_enabled;
-			if (settings.streaming_system == VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX &&
-				settings.collision_enabled && mesh_block.collision_viewers.get() > 0) {
-				task->collision_request_ticket = state.collision_request_tickets.issue();
-			}
-			mesh_block.expected_collision_ticket.store(task->collision_request_ticket);
+			task->collision_request_ticket = mesh_to_update.collision_request_ticket;
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
 			task->detail_texture_settings = settings.detail_texture_settings;
 			task->detail_texture_generator_override = settings.detail_texture_generator_override;

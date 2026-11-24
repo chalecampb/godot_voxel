@@ -185,4 +185,12 @@ void test_collision_segment_coverage_rejects_invalid_and_over_budget_inputs() {
 	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(INFINITY, 0, 0), Vector3(1, 1, 1), 1) == false);
 }
 
+// Requirements: WRLD-10, WRLD-17, WRLD-21
+void test_collision_segment_coverage_default_status_is_unavailable() {
+	Ref<CollisionSegmentCoverage> coverage;
+	coverage.instantiate();
+	ZN_TEST_ASSERT(coverage->get_status() == CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE);
+	ZN_TEST_ASSERT(coverage->get_leaf_count() == 0);
+}
+
 } // namespace zylann::voxel::tests
