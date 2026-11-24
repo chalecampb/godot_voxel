@@ -46,6 +46,10 @@ public:
 		return _state;
 	}
 
+	static bool is_current_result(uint64_t result_ticket, uint64_t expected_ticket) {
+		return result_ticket != 0 && result_ticket == expected_ticket;
+	}
+
 	void begin_request(uint64_t ticket) {
 		if (ticket == 0) {
 			clear();
