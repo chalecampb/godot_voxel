@@ -33,17 +33,7 @@ public:
 		return leaf_count;
 	}
 
-	static void _bind_methods() {
-		ClassDB::bind_method(D_METHOD("get_status"), &CollisionSegmentCoverage::get_status);
-		ClassDB::bind_method(D_METHOD("get_leaf_count"), &CollisionSegmentCoverage::get_leaf_count);
-		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_READY);
-		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_UNAVAILABLE);
-		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_OVER_BUDGET);
-		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_INVALID);
-		BIND_ENUM_CONSTANT(COLLISION_SEGMENT_UNSUPPORTED);
-		ADD_PROPERTY(PropertyInfo(Variant::INT, "status"), "", "get_status");
-		ADD_PROPERTY(PropertyInfo(Variant::INT, "leaf_count"), "", "get_leaf_count");
-	}
+	static void _bind_methods();
 
 	static bool is_valid_query(const Vector3 &from, const Vector3 &to, unsigned int max_leaves) {
 		return is_finite(from) && is_finite(to) && max_leaves > 0 && max_leaves <= 32;
@@ -94,5 +84,21 @@ private:
 } // namespace zylann::voxel
 
 VARIANT_ENUM_CAST(zylann::voxel::CollisionSegmentCoverage::Status)
+
+namespace zylann::voxel {
+
+inline void CollisionSegmentCoverage::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("get_status"), &CollisionSegmentCoverage::get_status);
+	ClassDB::bind_method(D_METHOD("get_leaf_count"), &CollisionSegmentCoverage::get_leaf_count);
+	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_READY);
+	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_UNAVAILABLE);
+	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_OVER_BUDGET);
+	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_INVALID);
+	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_UNSUPPORTED);
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "status"), "", "get_status");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "leaf_count"), "", "get_leaf_count");
+}
+
+} // namespace zylann::voxel
 
 #endif // VOXEL_COLLISION_SEGMENT_COVERAGE_H
