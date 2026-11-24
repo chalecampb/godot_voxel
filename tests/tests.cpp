@@ -130,6 +130,9 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_collision_block_publication_edit_invalidates_late_completion);
 	VOXEL_TEST(test_collision_block_publication_clear_and_reuse);
 	VOXEL_TEST(test_collision_block_publication_preserves_unaffected_block);
+	VOXEL_TEST(test_collision_request_tickets_are_positive_and_per_volume);
+	VOXEL_TEST(test_collision_request_ticket_sequence_survives_publication_clear);
+	VOXEL_TEST(test_collision_request_ticket_defaults_on_task_and_output);
 	VOXEL_TEST(test_block_serializer_stream_peer);
 	VOXEL_TEST(test_region_file);
 	VOXEL_TEST(test_voxel_stream_region_files);

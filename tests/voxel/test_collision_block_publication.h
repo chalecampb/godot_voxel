@@ -10,6 +10,9 @@ void test_collision_block_publication_exact_body_after_completion();
 void test_collision_block_publication_edit_invalidates_late_completion();
 void test_collision_block_publication_clear_and_reuse();
 void test_collision_block_publication_preserves_unaffected_block();
+void test_collision_request_tickets_are_positive_and_per_volume();
+void test_collision_request_ticket_sequence_survives_publication_clear();
+void test_collision_request_ticket_defaults_on_task_and_output();
 
 } // namespace zylann::voxel::tests
 
