@@ -13,6 +13,7 @@
 #include "shader_material_pool_vlt.h"
 #include "voxel_lod_terrain_update_data.h"
 #include "voxel_mesh_block_vlt.h"
+#include "collision_segment_coverage.h"
 
 #ifdef TOOLS_ENABLED
 #include "../../util/godot/debug_renderer.h"
@@ -201,6 +202,13 @@ public:
 
 	bool is_area_meshed(const Box3i &box_in_voxels, unsigned int lod_index) const;
 
+	Ref<CollisionSegmentCoverage> query_collision_segment_coverage(
+			Vector3 local_from,
+			Vector3 local_to,
+			int max_leaves
+	) const;
+	bool owns_current_collision_body(RID body) const;
+
 	enum StreamingSystem : uint8_t { //
 		STREAMING_SYSTEM_LEGACY_OCTREE = VoxelLodTerrainUpdateData::STREAMING_SYSTEM_LEGACY_OCTREE,
 		STREAMING_SYSTEM_CLIPBOX = VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX
@@ -335,6 +343,7 @@ private:
 	void save_all_modified_blocks(bool with_copy, std::shared_ptr<AsyncDependencyTracker> tracker) override;
 
 	void process_deferred_collision_updates(uint32_t timeout_msec);
+	void process_collision_publications();
 	void process_fading_blocks(float delta);
 
 	struct LocalCameraInfo {
@@ -406,6 +415,26 @@ private:
 	float _collision_margin = constants::DEFAULT_COLLISION_MARGIN;
 	int _collision_update_delay = 0;
 	FixedArray<StdVector<Vector3i>, constants::MAX_LOD> _deferred_collision_updates_per_lod;
+
+	struct CollisionPublicationRecord {
+		CollisionBlockPublication publication;
+		RID current_body;
+		uint64_t pending_ticket = 0;
+		uint64_t pending_physics_frame = 0;
+		bool pending_empty = false;
+	};
+	struct PendingCollisionPublication {
+		Vector3i position;
+		uint8_t lod_index = 0;
+		uint64_t ticket = 0;
+		uint64_t due_physics_frame = 0;
+		RID body;
+		bool empty = false;
+	};
+	FixedArray<StdUnorderedMap<Vector3i, CollisionPublicationRecord>, constants::MAX_LOD>
+			_collision_publications_per_lod;
+	StdVector<PendingCollisionPublication> _pending_collision_publications;
+	StdUnorderedMap<uint64_t, VoxelLodTerrainUpdateData::BlockLocation> _collision_body_locations;
 
 	float _lod_fade_duration = 0.f;
 	// Note, direct pointers to mesh blocks should be safe because these blocks are always destroyed from the same

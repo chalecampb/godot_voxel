@@ -1271,6 +1271,7 @@ void VoxelLodTerrain::process(float delta) {
 
 	// TODO This could go into time spread tasks too
 	process_deferred_collision_updates(VoxelEngine::get_singleton().get_main_thread_time_budget_usec());
+	process_collision_publications();
 
 #ifdef TOOLS_ENABLED
 	if (debug_is_draw_enabled() && is_visible_in_tree()) {
@@ -1890,18 +1891,25 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 			++_stats.dropped_block_meshs;
 			return;
 		}
-		if (ob.type == VoxelEngine::BlockMeshOutput::TYPE_DROPPED) {
-			// That block is loaded, but its meshing request was dropped.
-			// TODO Not sure what to do in this case, the code sending update queries has to be tweaked
-			ZN_PRINT_VERBOSE("Received a block mesh drop while we were still expecting it");
-			++_stats.dropped_block_meshs;
-			return;
-		}
-
 		VoxelLodTerrainUpdateData::MeshBlockState &mesh_block_state = mesh_block_state_it->second;
 		current_collision_result = CollisionBlockPublication::is_current_result(
 				ob.collision_request_ticket, mesh_block_state.expected_collision_ticket.load()
 		);
+		if (current_collision_result &&
+				_update_data->settings.streaming_system == VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX) {
+			CollisionPublicationRecord &record = _collision_publications_per_lod[ob.lod][ob.position];
+			if (record.current_body.is_valid()) {
+				_collision_body_locations.erase(record.current_body.get_id());
+			}
+			record.publication.begin_request(ob.collision_request_ticket);
+			record.current_body = RID();
+			record.pending_ticket = 0;
+		}
+		if (ob.type == VoxelEngine::BlockMeshOutput::TYPE_DROPPED) {
+			ZN_PRINT_VERBOSE("Received a block mesh drop while we were still expecting it");
+			++_stats.dropped_block_meshs;
+			return;
+		}
 
 		transition_mask = mesh_block_state.transition_mask;
 
@@ -1991,6 +1999,15 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 				_instancer->on_mesh_block_exit(ob.position, ob.lod);
 			}
 #endif
+		}
+		if (current_collision_result && ob.collision_request_ticket != 0) {
+			PendingCollisionPublication pending;
+			pending.position = ob.position;
+			pending.lod_index = ob.lod;
+			pending.ticket = ob.collision_request_ticket;
+			pending.due_physics_frame = Engine::get_singleton()->get_physics_frames() + 2;
+			pending.empty = true;
+			_pending_collision_publications.push_back(pending);
 		}
 		// ZN_PRINT_VERBOSE(format("Empty block pos {} lod {} time {}", ob.position, int(ob.lod),
 		// 		Time::get_singleton()->get_ticks_msec()));
@@ -2159,6 +2176,17 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 			Ref<Shape3D> collision_shape = make_collision_shape_from_mesher_output(ob.surfaces, **_mesher);
 			set_block_collision_shape(*this, *block, collision_shape, now);
 			block->set_collision_enabled(collision_active);
+			if (ob.collision_request_ticket != 0 && current_collision_result && collision_shape.is_valid()) {
+				PendingCollisionPublication pending;
+				pending.position = ob.position;
+				pending.lod_index = ob.lod;
+				pending.ticket = ob.collision_request_ticket;
+				pending.due_physics_frame = Engine::get_singleton()->get_physics_frames() + 2;
+				pending.body = block->get_collision_body_rid();
+				if (pending.body.is_valid()) {
+					_pending_collision_publications.push_back(pending);
+				}
+			}
 
 		} else {
 			if (block->deferred_collider_data == nullptr) {
@@ -2430,6 +2458,17 @@ void VoxelLodTerrain::process_deferred_collision_updates(uint32_t timeout_msec) 
 				set_block_collision_shape(*this, *block, collision_shape, now);
 				block->collision_request_ticket = block->deferred_collision_request_ticket;
 				block->deferred_collision_request_ticket = 0;
+				if (collision_shape.is_valid() && block->collision_request_ticket != 0) {
+					PendingCollisionPublication pending;
+					pending.position = block_pos;
+					pending.lod_index = lod_index;
+					pending.ticket = block->collision_request_ticket;
+					pending.due_physics_frame = Engine::get_singleton()->get_physics_frames() + 2;
+					pending.body = block->get_collision_body_rid();
+					if (pending.body.is_valid()) {
+						_pending_collision_publications.push_back(pending);
+					}
+				}
 
 				unordered_remove(deferred_collision_updates, i);
 				--i;
@@ -2439,6 +2478,58 @@ void VoxelLodTerrain::process_deferred_collision_updates(uint32_t timeout_msec) 
 			if (get_ticks_msec() - then >= timeout_msec) {
 				return;
 			}
+		}
+	}
+}
+
+void VoxelLodTerrain::process_collision_publications() {
+	const uint64_t physics_frame = Engine::get_singleton()->get_physics_frames();
+	for (unsigned int i = 0; i < _pending_collision_publications.size(); ++i) {
+		const PendingCollisionPublication pending = _pending_collision_publications[i];
+		if (physics_frame < pending.due_physics_frame) {
+			continue;
+		}
+		unordered_remove(_pending_collision_publications, i);
+		--i;
+		if (pending.lod_index >= get_lod_count()) {
+			continue;
+		}
+		VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[pending.lod_index];
+		if (!lod.mesh_map_state.map_lock.read_try_lock()) {
+			continue;
+		}
+		auto state_it = lod.mesh_map_state.map.find(pending.position);
+		const bool current = state_it != lod.mesh_map_state.map.end() &&
+				state_it->second.expected_collision_ticket.load() == pending.ticket;
+		lod.mesh_map_state.map_lock.read_unlock();
+		if (!current) {
+			continue;
+		}
+		auto record_it = _collision_publications_per_lod[pending.lod_index].find(pending.position);
+		if (record_it == _collision_publications_per_lod[pending.lod_index].end() ||
+				record_it->second.publication.get_ticket() != pending.ticket) {
+			continue;
+		}
+		CollisionPublicationRecord &record = record_it->second;
+		VoxelMeshBlockVLT *block = _mesh_maps_per_lod[pending.lod_index].get_block(pending.position);
+		if (pending.empty) {
+			if (block != nullptr && block->has_collision_shape()) {
+				continue;
+			}
+			record.publication.publish_empty(pending.ticket);
+			record.current_body = RID();
+			record.pending_ticket = 0;
+			continue;
+		}
+		if (block == nullptr || !block->has_collision_shape() || block->get_collision_body_rid() != pending.body ||
+				block->collision_request_ticket != pending.ticket) {
+			continue;
+		}
+		if (record.publication.publish_body(pending.ticket)) {
+			record.current_body = pending.body;
+			record.pending_ticket = 0;
+			_collision_body_locations[pending.body.get_id()] =
+					VoxelLodTerrainUpdateData::BlockLocation{ pending.position, pending.lod_index };
 		}
 	}
 }
@@ -2747,6 +2838,232 @@ bool VoxelLodTerrain::is_area_meshed(const Box3i &box_in_voxels, unsigned int lo
 		const VoxelLodTerrainUpdateData::MeshBlockState &block = it->second;
 		return block.state == VoxelLodTerrainUpdateData::MESH_UP_TO_DATE;
 	});
+}
+
+Ref<CollisionSegmentCoverage> VoxelLodTerrain::query_collision_segment_coverage(
+		Vector3 local_from,
+		Vector3 local_to,
+		int max_leaves
+) const {
+	Ref<CollisionSegmentCoverage> result;
+	result.instantiate();
+
+	if (!CollisionSegmentCoverage::is_valid_query(local_from, local_to, max_leaves)) {
+		result->status = CollisionSegmentCoverage::COLLISION_SEGMENT_INVALID;
+		return result;
+	}
+	if (_update_data->settings.streaming_system != VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX) {
+		result->status = CollisionSegmentCoverage::COLLISION_SEGMENT_UNSUPPORTED;
+		return result;
+	}
+	if (!get_generate_collisions() || get_lod_count() == 0) {
+		result->status = CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE;
+		return result;
+	}
+
+	const Box3i voxel_bounds = _data->get_bounds();
+	const Vector3 bounds_min(voxel_bounds.position.x, voxel_bounds.position.y, voxel_bounds.position.z);
+	const Vector3 bounds_max(
+			voxel_bounds.position.x + voxel_bounds.size.x,
+			voxel_bounds.position.y + voxel_bounds.size.y,
+			voxel_bounds.position.z + voxel_bounds.size.z
+	);
+	const auto endpoint_inside_bounds = [&bounds_min, &bounds_max](const Vector3 &p) {
+		return p.x >= bounds_min.x && p.y >= bounds_min.y && p.z >= bounds_min.z && p.x <= bounds_max.x &&
+				p.y <= bounds_max.y && p.z <= bounds_max.z;
+	};
+	if (!endpoint_inside_bounds(local_from) || !endpoint_inside_bounds(local_to)) {
+		result->status = CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE;
+		return result;
+	}
+
+	const unsigned int lod_count = get_lod_count();
+	const unsigned int collision_lods = _collision_lod_count == 0 ? lod_count : math::min(_collision_lod_count, lod_count);
+	if (collision_lods == 0) {
+		result->status = CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE;
+		return result;
+	}
+	const unsigned int root_lod = collision_lods - 1;
+	const int mesh_block_size = get_mesh_block_size();
+	const int root_step = mesh_block_size << root_lod;
+	Box3i root_bounds = voxel_bounds.downscaled(root_step);
+	const Vector3 segment_min(
+			math::min(local_from.x, local_to.x), math::min(local_from.y, local_to.y), math::min(local_from.z, local_to.z)
+	);
+	const Vector3 segment_max(
+			math::max(local_from.x, local_to.x), math::max(local_from.y, local_to.y), math::max(local_from.z, local_to.z)
+	);
+	Vector3i root_min(
+			int(std::floor(segment_min.x / root_step)) - 1,
+			int(std::floor(segment_min.y / root_step)) - 1,
+			int(std::floor(segment_min.z / root_step)) - 1
+	);
+	Vector3i root_max(
+			int(std::floor(segment_max.x / root_step)),
+			int(std::floor(segment_max.y / root_step)),
+			int(std::floor(segment_max.z / root_step))
+	);
+	const Vector3i bounds_max_cell = root_bounds.position + root_bounds.size - Vector3i(1, 1, 1);
+	root_min.x = math::max(root_min.x, root_bounds.position.x);
+	root_min.y = math::max(root_min.y, root_bounds.position.y);
+	root_min.z = math::max(root_min.z, root_bounds.position.z);
+	root_max.x = math::min(root_max.x, bounds_max_cell.x);
+	root_max.y = math::min(root_max.y, bounds_max_cell.y);
+	root_max.z = math::min(root_max.z, bounds_max_cell.z);
+	if (root_min.x > root_max.x || root_min.y > root_max.y || root_min.z > root_max.z) {
+		result->status = CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE;
+		return result;
+	}
+
+	unsigned int visits = 0;
+	unsigned int leaves = 0;
+	bool unavailable = false;
+	bool over_budget = false;
+	StdVector<VoxelLodTerrainUpdateData::BlockLocation> unique_leaves;
+	const auto visit_node = [&](auto &&self, unsigned int lod_index, Vector3i position) -> void {
+		if (unavailable || over_budget) {
+			return;
+		}
+		const int step = mesh_block_size << lod_index;
+		const Vector3 node_min(position.x * step, position.y * step, position.z * step);
+		const Vector3 node_max(node_min.x + step, node_min.y + step, node_min.z + step);
+		if (!CollisionSegmentCoverage::segment_intersects_closed_box(local_from, local_to, node_min, node_max)) {
+			return;
+		}
+
+		const VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
+		if (!lod.mesh_map_state.map_lock.read_try_lock()) {
+			unavailable = true;
+			return;
+		}
+		auto state_it = lod.mesh_map_state.map.find(position);
+		bool active = false;
+		uint64_t expected_ticket = 0;
+		if (state_it != lod.mesh_map_state.map.end()) {
+			active = state_it->second.collision_active;
+			expected_ticket = state_it->second.expected_collision_ticket.load();
+		}
+		lod.mesh_map_state.map_lock.read_unlock();
+
+		if (active) {
+			if (expected_ticket == 0) {
+				unavailable = true;
+				return;
+			}
+			auto record_it = _collision_publications_per_lod[lod_index].find(position);
+			if (record_it == _collision_publications_per_lod[lod_index].end() ||
+					record_it->second.publication.get_ticket() != expected_ticket ||
+					record_it->second.publication.get_state() == CollisionBlockPublication::State::UNAVAILABLE) {
+				unavailable = true;
+				return;
+			}
+			const CollisionPublicationRecord &record = record_it->second;
+			VoxelMeshBlockVLT *block = _mesh_maps_per_lod[lod_index].get_block(position);
+			if (record.publication.get_state() == CollisionBlockPublication::State::BODY) {
+				if (block == nullptr || !block->has_collision_shape() ||
+						block->collision_request_ticket != expected_ticket || block->get_collision_body_rid() != record.current_body) {
+					unavailable = true;
+					return;
+				}
+			} else if (block != nullptr && block->has_collision_shape()) {
+				unavailable = true;
+				return;
+			}
+			const VoxelLodTerrainUpdateData::BlockLocation location{ position, uint8_t(lod_index) };
+			bool found = false;
+			for (const VoxelLodTerrainUpdateData::BlockLocation old_location : unique_leaves) {
+				if (old_location.position == position && old_location.lod == lod_index) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				unique_leaves.push_back(location);
+				++leaves;
+			}
+			if (leaves > unsigned(max_leaves)) {
+				over_budget = true;
+			}
+			return;
+		}
+
+		if (lod_index == 0) {
+			unavailable = true;
+			return;
+		}
+		const Vector3i child_base = position * 2;
+		for (int z = 0; z < 2; ++z) {
+			for (int x = 0; x < 2; ++x) {
+				for (int y = 0; y < 2; ++y) {
+					const Vector3i child(child_base.x + x, child_base.y + y, child_base.z + z);
+					const int child_step = step / 2;
+					const Vector3 child_min(child.x * child_step, child.y * child_step, child.z * child_step);
+					const Vector3 child_max(child_min.x + child_step, child_min.y + child_step, child_min.z + child_step);
+					if (++visits > 2048) {
+						over_budget = true;
+						return;
+					}
+					if (CollisionSegmentCoverage::segment_intersects_closed_box(local_from, local_to, child_min, child_max)) {
+						self(self, lod_index - 1, child);
+					}
+				}
+			}
+		}
+	};
+
+	for (int z = root_min.z; z <= root_max.z && !unavailable && !over_budget; ++z) {
+		for (int x = root_min.x; x <= root_max.x && !unavailable && !over_budget; ++x) {
+			for (int y = root_min.y; y <= root_max.y && !unavailable && !over_budget; ++y) {
+				if (++visits > 2048) {
+					over_budget = true;
+					break;
+				}
+				visit_node(visit_node, root_lod, Vector3i(x, y, z));
+			}
+		}
+	}
+	result->leaf_count = leaves;
+	result->status = over_budget ? CollisionSegmentCoverage::COLLISION_SEGMENT_OVER_BUDGET
+			: unavailable || leaves == 0 ? CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE
+										 : CollisionSegmentCoverage::COLLISION_SEGMENT_READY;
+	return result;
+}
+
+bool VoxelLodTerrain::owns_current_collision_body(RID body) const {
+	if (!body.is_valid() || _update_data->settings.streaming_system != VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX ||
+			!get_generate_collisions()) {
+		return false;
+	}
+	const auto location_it = _collision_body_locations.find(body.get_id());
+	if (location_it == _collision_body_locations.end()) {
+		return false;
+	const VoxelLodTerrainUpdateData::BlockLocation location = location_it->second;
+	if (location.lod >= get_lod_count()) {
+		return false;
+	}
+	const VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[location.lod];
+	if (!lod.mesh_map_state.map_lock.read_try_lock()) {
+		return false;
+	}
+	auto state_it = lod.mesh_map_state.map.find(location.position);
+	const uint64_t expected_ticket = state_it == lod.mesh_map_state.map.end()
+			? 0
+			: state_it->second.expected_collision_ticket.load();
+	const bool active = state_it != lod.mesh_map_state.map.end() && state_it->second.collision_active;
+	lod.mesh_map_state.map_lock.read_unlock();
+	if (!active || expected_ticket == 0) {
+		return false;
+	}
+	auto record_it = _collision_publications_per_lod[location.lod].find(location.position);
+	if (record_it == _collision_publications_per_lod[location.lod].end()) {
+		return false;
+	}
+	const CollisionPublicationRecord &record = record_it->second;
+	VoxelMeshBlockVLT *block = _mesh_maps_per_lod[location.lod].get_block(location.position);
+	return record.publication.get_ticket() == expected_ticket &&
+			record.publication.get_state() == CollisionBlockPublication::State::BODY && record.current_body == body &&
+			block != nullptr && block->has_collision_shape() && block->get_collision_body_rid() == body &&
+			block->collision_request_ticket == expected_ticket;
 }
 
 VoxelLodTerrain::StreamingSystem VoxelLodTerrain::get_streaming_system() const {
@@ -3914,6 +4231,11 @@ void VoxelLodTerrain::_bind_methods() {
 	);
 
 	ClassDB::bind_method(D_METHOD("is_area_meshed", "area_in_voxels", "lod_index"), &Self::_b_is_area_meshed);
+	ClassDB::bind_method(
+			D_METHOD("query_collision_segment_coverage", "local_from", "local_to", "max_leaves"),
+			&Self::query_collision_segment_coverage
+	);
+	ClassDB::bind_method(D_METHOD("owns_current_collision_body", "body"), &Self::owns_current_collision_body);
 
 	// Normalmaps
 
