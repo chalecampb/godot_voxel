@@ -3037,6 +3037,7 @@ bool VoxelLodTerrain::owns_current_collision_body(RID body) const {
 	const auto location_it = _collision_body_locations.find(body.get_id());
 	if (location_it == _collision_body_locations.end()) {
 		return false;
+	}
 	const VoxelLodTerrainUpdateData::BlockLocation location = location_it->second;
 	if (location.lod >= get_lod_count()) {
 		return false;
