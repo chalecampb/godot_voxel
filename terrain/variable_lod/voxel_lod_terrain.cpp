@@ -1,4 +1,5 @@
 #include "voxel_lod_terrain.h"
+#include "collision_block_publication.h"
 #include "../../constants/voxel_string_names.h"
 #include "../../edition/voxel_tool_lod_terrain.h"
 #include "../../engine/buffered_task_scheduler.h"
@@ -109,9 +110,22 @@ void VoxelLodTerrain::ApplyMeshUpdateTask::run(TimeSpreadTaskContext &ctx) {
 	if (it != queued_tasks_in_lod.end()) {
 		RefCount &count = it->second;
 		count.remove();
-		if (count.get() > 0) {
+		bool current_collision_result = false;
+		if (data.collision_request_ticket != 0 && data.lod < self->get_lod_count()) {
+			VoxelLodTerrainUpdateData::Lod &lod = self->_update_data->state.lods[data.lod];
+			RWLockRead rlock(lod.mesh_map_state.map_lock);
+			auto block_it = lod.mesh_map_state.map.find(data.position);
+			if (block_it != lod.mesh_map_state.map.end()) {
+				current_collision_result = CollisionBlockPublication::is_current_result(
+						data.collision_request_ticket,
+						block_it->second.expected_collision_ticket.load()
+				);
+			}
+		}
+		if (count.get() > 0 && !current_collision_result) {
 			// This is not the only main thread task queued for this block.
-			// Cancel it to avoid buildup.
+			// Cancel it to avoid buildup, except a current collision result: it must survive
+			// stale and visual-only results that arrived later.
 			return;
 		}
 		queued_tasks_in_lod.erase(it);
@@ -607,6 +621,18 @@ void VoxelLodTerrain::post_edit_area(Box3i p_box, bool update_mesh) {
 	ZN_PROFILE_SCOPE();
 	{
 		MutexLock lock(_update_data->state.edit_notifications.mutex);
+		const unsigned int lod_count = get_lod_count();
+		for (unsigned int lod_index = 0; lod_index < lod_count; ++lod_index) {
+			VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
+			const Box3i affected = p_box.padded(1).downscaled(get_mesh_block_size() << lod_index);
+			RWLockRead map_lock(lod.mesh_map_state.map_lock);
+			affected.for_each_cell_zxy([&lod](Vector3i position) {
+				auto it = lod.mesh_map_state.map.find(position);
+				if (it != lod.mesh_map_state.map.end()) {
+					it->second.expected_collision_ticket.store(0);
+				}
+			});
+		}
 		_data->mark_area_modified(p_box, &_update_data->state.edit_notifications.edited_blocks_lod0, update_mesh);
 		_update_data->state.edit_notifications.edited_voxel_areas_lod0.push_back(p_box);
 	}
@@ -643,6 +669,18 @@ void VoxelLodTerrain::post_edit_modifiers(Box3i p_voxel_box) {
 	// Not sure if it is worth re-caching these blocks. We may see about that in the future if performance is an issue.
 
 	MutexLock lock(_update_data->state.changed_generated_areas_mutex);
+	const unsigned int lod_count = get_lod_count();
+	for (unsigned int lod_index = 0; lod_index < lod_count; ++lod_index) {
+		VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
+		const Box3i affected = p_voxel_box.padded(1).downscaled(get_mesh_block_size() << lod_index);
+		RWLockRead map_lock(lod.mesh_map_state.map_lock);
+		affected.for_each_cell_zxy([&lod](Vector3i position) {
+			auto it = lod.mesh_map_state.map.find(position);
+			if (it != lod.mesh_map_state.map.end()) {
+				it->second.expected_collision_ticket.store(0);
+			}
+		});
+	}
 	_update_data->state.changed_generated_areas.push_back(p_voxel_box);
 
 #ifdef TOOLS_ENABLED
@@ -722,6 +760,7 @@ void VoxelLodTerrain::stop_updater() {
 
 		for (auto it = lod.mesh_map_state.map.begin(); it != lod.mesh_map_state.map.end(); ++it) {
 			VoxelLodTerrainUpdateData::MeshBlockState &mesh_block = it->second;
+			mesh_block.expected_collision_ticket.store(0);
 			if (mesh_block.state == VoxelLodTerrainUpdateData::MESH_UPDATE_SENT) {
 				mesh_block.state = VoxelLodTerrainUpdateData::MESH_UPDATE_NOT_SENT;
 			}
@@ -1446,6 +1485,10 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 		lod.mesh_blocks_to_drop_visual.clear();
 
 		for (const Vector3i bpos : lod.mesh_blocks_to_drop_collision) {
+			auto state_it = lod.mesh_map_state.map.find(bpos);
+			if (state_it != lod.mesh_map_state.map.end()) {
+				state_it->second.expected_collision_ticket.store(0);
+			}
 			VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
 			if (block == nullptr) {
 				continue;
@@ -1851,6 +1894,7 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 	bool first_visual_load = false;
 	bool visual_expected = false;
 	bool collision_expected = false;
+	bool current_collision_result = false;
 	{
 		VoxelLodTerrainUpdateData::Lod &lod = update_data.state.lods[ob.lod];
 		RWLockRead rlock(lod.mesh_map_state.map_lock);
@@ -1869,6 +1913,9 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 		}
 
 		VoxelLodTerrainUpdateData::MeshBlockState &mesh_block_state = mesh_block_state_it->second;
+		current_collision_result = CollisionBlockPublication::is_current_result(
+				ob.collision_request_ticket, mesh_block_state.expected_collision_ticket.load()
+		);
 
 		transition_mask = mesh_block_state.transition_mask;
 
@@ -1888,7 +1935,7 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 			// First mesh load? (note, no mesh being present counts as load too. Before that we would not know)
 			first_visual_load = (mesh_block_state.visual_loaded.exchange(true) == false);
 		}
-		if (collision_expected) {
+		if (collision_expected && (ob.collision_request_ticket == 0 || current_collision_result)) {
 			// Mark collisions loaded for the streaming system to subdivide LODs.
 			// First mesh load? (note, no mesh being present counts as load too. Before that we would not know)
 			first_collision_load = (mesh_block_state.collision_loaded.exchange(true) == false);
@@ -1996,6 +2043,9 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 #endif
 
 		block->set_collision_enabled(collision_active);
+	}
+	if (ob.collision_request_ticket != 0 && current_collision_result) {
+		block->collision_request_ticket = ob.collision_request_ticket;
 	}
 
 #ifdef DEV_ENABLED
@@ -2106,7 +2156,10 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 		}
 	}
 
-	bool has_collision = get_generate_collisions();
+	const bool collision_route_enabled = update_data.settings.streaming_system !=
+				VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX ||
+			(ob.collision_request_ticket != 0 && current_collision_result);
+	bool has_collision = get_generate_collisions() && collision_route_enabled;
 	if (has_collision && _collision_lod_count != 0) {
 		has_collision = ob.lod < _collision_lod_count;
 	}
@@ -2127,6 +2180,7 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 				block->deferred_collider_data = make_unique_instance<VoxelMesher::Output>();
 			}
 			*block->deferred_collider_data = std::move(ob.surfaces);
+			block->deferred_collision_request_ticket = ob.collision_request_ticket;
 		}
 	}
 
@@ -2361,6 +2415,22 @@ void VoxelLodTerrain::process_deferred_collision_updates(uint32_t timeout_msec) 
 				--i;
 				continue;
 			}
+			{
+				VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
+				RWLockRead rlock(lod.mesh_map_state.map_lock);
+				auto state_it = lod.mesh_map_state.map.find(block_pos);
+				if (state_it == lod.mesh_map_state.map.end() ||
+						!CollisionBlockPublication::is_current_result(
+								block->deferred_collision_request_ticket,
+								state_it->second.expected_collision_ticket.load()
+						)) {
+					block->deferred_collider_data.reset();
+					block->deferred_collision_request_ticket = 0;
+					unordered_remove(deferred_collision_updates, i);
+					--i;
+					continue;
+				}
+			}
 
 			const uint64_t now = get_ticks_msec();
 
@@ -2372,6 +2442,8 @@ void VoxelLodTerrain::process_deferred_collision_updates(uint32_t timeout_msec) 
 				}
 
 				set_block_collision_shape(*this, *block, collision_shape, now);
+				block->collision_request_ticket = block->deferred_collision_request_ticket;
+				block->deferred_collision_request_ticket = 0;
 
 				unordered_remove(deferred_collision_updates, i);
 				--i;
@@ -2666,6 +2738,7 @@ void VoxelLodTerrain::remesh_all_blocks() {
 	for (unsigned int lod_index = 0; lod_index < lod_count; ++lod_index) {
 		VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
 		for (auto it = lod.mesh_map_state.map.begin(); it != lod.mesh_map_state.map.end(); ++it) {
+			it->second.expected_collision_ticket.store(0);
 			VoxelLodTerrainUpdateTask::schedule_mesh_update(
 					it->second, it->first, lod.mesh_blocks_pending_update, it->second.mesh_viewers.get() > 0
 			);

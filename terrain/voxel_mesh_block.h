@@ -67,6 +67,9 @@ public:
 
 	void set_collision_shape(Ref<Shape3D> shape, bool debug_collision, const Node3D *node, float margin);
 	bool has_collision_shape() const;
+	RID get_collision_body_rid() const {
+		return _static_body.get_rid();
+	}
 	void set_collision_layer(int layer);
 	void set_collision_mask(int mask);
 	void set_collision_margin(float margin);

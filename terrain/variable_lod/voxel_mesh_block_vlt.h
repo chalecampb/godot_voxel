@@ -37,6 +37,8 @@ public:
 	uint8_t detail_texture_fallback_level = 0;
 
 	uint64_t last_collider_update_time = 0;
+	uint64_t collision_request_ticket = 0;
+	uint64_t deferred_collision_request_ticket = 0;
 	UniquePtr<VoxelMesher::Output> deferred_collider_data;
 
 	int32_t col_vertex_end = -1;

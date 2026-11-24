@@ -343,6 +343,7 @@ void send_mesh_requests(
 				settings.collision_enabled && mesh_block.collision_viewers.get() > 0) {
 				task->collision_request_ticket = state.collision_request_tickets.issue();
 			}
+			mesh_block.expected_collision_ticket.store(task->collision_request_ticket);
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
 			task->detail_texture_settings = settings.detail_texture_settings;
 			task->detail_texture_generator_override = settings.detail_texture_generator_override;
