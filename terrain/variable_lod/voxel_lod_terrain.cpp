@@ -3074,7 +3074,7 @@ bool VoxelLodTerrain::owns_current_collision_body(RID body) const {
 		return false;
 	}
 	const CollisionPublicationRecord &record = record_it->second;
-	VoxelMeshBlockVLT *block = _mesh_maps_per_lod[location.lod].get_block(location.position);
+	const VoxelMeshBlockVLT *block = _mesh_maps_per_lod[location.lod].get_block(location.position);
 	return record.publication.get_ticket() == expected_ticket &&
 			record.publication.get_state() == CollisionBlockPublication::State::BODY && record.current_body == body &&
 			block != nullptr && block->has_collision_shape() && block->get_collision_body_rid() == body &&
