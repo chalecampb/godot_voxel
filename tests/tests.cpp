@@ -15,6 +15,7 @@
 #include "util/test_threaded_task_runner.h"
 
 #include "voxel/test_block_serializer.h"
+#include "voxel/test_collision_block_publication.h"
 #include "voxel/test_curve_range.h"
 #include "voxel/test_edition_funcs.h"
 #include "voxel/test_octree.h"
@@ -122,6 +123,13 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_get_curve_monotonic_sections);
 	VOXEL_TEST(test_voxel_buffer_create);
 	VOXEL_TEST(test_block_serializer);
+	VOXEL_TEST(test_collision_block_publication_default_and_queued_work);
+	VOXEL_TEST(test_collision_block_publication_rejects_zero_and_wrong_tickets);
+	VOXEL_TEST(test_collision_block_publication_exact_empty_and_duplicate);
+	VOXEL_TEST(test_collision_block_publication_exact_body_after_completion);
+	VOXEL_TEST(test_collision_block_publication_edit_invalidates_late_completion);
+	VOXEL_TEST(test_collision_block_publication_clear_and_reuse);
+	VOXEL_TEST(test_collision_block_publication_preserves_unaffected_block);
 	VOXEL_TEST(test_block_serializer_stream_peer);
 	VOXEL_TEST(test_region_file);
 	VOXEL_TEST(test_voxel_stream_region_files);
