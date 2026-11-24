@@ -939,6 +939,7 @@ void VoxelLodTerrain::reset_maps() {
 
 void VoxelLodTerrain::reset_mesh_maps() {
 	_update_data->wait_for_end_of_task();
+	invalidate_collision_publications();
 
 	const unsigned int lod_count = get_lod_count();
 	VoxelLodTerrainUpdateData::State &state = _update_data->state;
@@ -1006,7 +1007,14 @@ int VoxelLodTerrain::get_lod_count() const {
 }
 
 void VoxelLodTerrain::set_generate_collisions(bool enabled) {
+	if (_update_data->settings.collision_enabled == enabled) {
+		return;
+	}
+	invalidate_collision_publications();
 	_update_data->settings.collision_enabled = enabled;
+	if (enabled) {
+		remesh_all_blocks();
+	}
 }
 
 bool VoxelLodTerrain::get_generate_collisions() const {
@@ -1015,7 +1023,13 @@ bool VoxelLodTerrain::get_generate_collisions() const {
 
 void VoxelLodTerrain::set_collision_lod_count(int lod_count) {
 	ERR_FAIL_COND(lod_count < 0);
-	_collision_lod_count = static_cast<unsigned int>(math::min(lod_count, get_lod_count()));
+	const unsigned int new_count = static_cast<unsigned int>(math::min(lod_count, get_lod_count()));
+	if (_collision_lod_count == new_count) {
+		return;
+	}
+	invalidate_collision_publications();
+	_collision_lod_count = new_count;
+	remesh_all_blocks();
 }
 
 int VoxelLodTerrain::get_collision_lod_count() const {
@@ -1023,6 +1037,10 @@ int VoxelLodTerrain::get_collision_lod_count() const {
 }
 
 void VoxelLodTerrain::set_collision_layer(int layer) {
+	if (_collision_layer == unsigned(layer)) {
+		return;
+	}
+	invalidate_collision_publications();
 	const unsigned int lod_count = get_lod_count();
 
 	_collision_layer = layer;
@@ -1032,6 +1050,7 @@ void VoxelLodTerrain::set_collision_layer(int layer) {
 			block.set_collision_layer(layer);
 		});
 	}
+	remesh_all_blocks();
 }
 
 int VoxelLodTerrain::get_collision_layer() const {
@@ -1039,6 +1058,10 @@ int VoxelLodTerrain::get_collision_layer() const {
 }
 
 void VoxelLodTerrain::set_collision_mask(int mask) {
+	if (_collision_mask == unsigned(mask)) {
+		return;
+	}
+	invalidate_collision_publications();
 	const unsigned int lod_count = get_lod_count();
 
 	_collision_mask = mask;
@@ -1048,6 +1071,7 @@ void VoxelLodTerrain::set_collision_mask(int mask) {
 			block.set_collision_mask(mask);
 		});
 	}
+	remesh_all_blocks();
 }
 
 int VoxelLodTerrain::get_collision_mask() const {
@@ -1055,6 +1079,10 @@ int VoxelLodTerrain::get_collision_mask() const {
 }
 
 void VoxelLodTerrain::set_collision_margin(float margin) {
+	if (_collision_margin == margin) {
+		return;
+	}
+	invalidate_collision_publications();
 	const unsigned int lod_count = get_lod_count();
 
 	_collision_margin = margin;
@@ -1064,6 +1092,7 @@ void VoxelLodTerrain::set_collision_margin(float margin) {
 			block.set_collision_margin(margin);
 		});
 	}
+	remesh_all_blocks();
 }
 
 float VoxelLodTerrain::get_collision_margin() const {
@@ -1143,6 +1172,7 @@ void VoxelLodTerrain::_notification(int p_what) {
 			break;
 
 		case NOTIFICATION_ENTER_WORLD: {
+			invalidate_collision_publications();
 			World3D *world = *get_world_3d();
 			VoxelLodTerrainUpdateData::State &state = _update_data->state;
 			for (unsigned int lod_index = 0; lod_index < state.lods.size(); ++lod_index) {
@@ -1161,6 +1191,7 @@ void VoxelLodTerrain::_notification(int p_what) {
 		} break;
 
 		case NOTIFICATION_EXIT_WORLD: {
+			invalidate_collision_publications();
 			VoxelLodTerrainUpdateData::State &state = _update_data->state;
 			for (unsigned int lod_index = 0; lod_index < state.lods.size(); ++lod_index) {
 				VoxelMeshMap<VoxelMeshBlockVLT> &mesh_map = _mesh_maps_per_lod[lod_index];
@@ -1215,6 +1246,8 @@ void VoxelLodTerrain::_notification(int p_what) {
 			for (FadingOutMesh &item : _fading_out_meshes) {
 				item.mesh_instance.set_transform(transform * Transform3D(Basis(), item.local_position));
 			}
+			invalidate_collision_publications();
+			remesh_all_blocks();
 		} break;
 
 		default:
@@ -1490,6 +1523,15 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 			if (state_it != lod.mesh_map_state.map.end()) {
 				state_it->second.expected_collision_ticket.store(0);
 			}
+			auto publication_it = _collision_publications_per_lod[lod_index].find(bpos);
+			if (publication_it != _collision_publications_per_lod[lod_index].end()) {
+				if (publication_it->second.current_body.is_valid()) {
+					_collision_body_locations.erase(publication_it->second.current_body.get_id());
+				}
+				publication_it->second.publication.clear();
+				publication_it->second.current_body = RID();
+				publication_it->second.pending_ticket = 0;
+			}
 			VoxelMeshBlockVLT *block = mesh_map.get_block(bpos);
 			if (block == nullptr) {
 				continue;
@@ -1587,6 +1629,15 @@ void VoxelLodTerrain::apply_main_thread_update_tasks() {
 
 			if (fading_block_it != fading_blocks_in_current_lod.end()) {
 				fading_blocks_in_current_lod.erase(fading_block_it);
+			}
+			auto publication_it = _collision_publications_per_lod[lod_index].find(bpos);
+			if (publication_it != _collision_publications_per_lod[lod_index].end()) {
+				if (publication_it->second.current_body.is_valid()) {
+					_collision_body_locations.erase(publication_it->second.current_body.get_id());
+				}
+				publication_it->second.publication.clear();
+				publication_it->second.current_body = RID();
+				publication_it->second.pending_ticket = 0;
 			}
 
 			mesh_map.remove_block(bpos, BeforeUnloadMeshAction{ _shader_material_pool });
@@ -2183,6 +2234,7 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 
 	if (has_collision && collision_expected) {
 		const uint64_t now = get_ticks_msec();
+		const bool collision_surface_empty = ob.surfaces.collision_surface.indices.size() == 0;
 
 		if (_collision_update_delay == 0 ||
 			static_cast<int>(now - block->last_collider_update_time) > _collision_update_delay) {
@@ -2190,6 +2242,15 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 			Ref<Shape3D> collision_shape = make_collision_shape_from_mesher_output(ob.surfaces, **_mesher);
 			set_block_collision_shape(*this, *block, collision_shape, now);
 			block->set_collision_enabled(collision_active);
+			if (collision_surface_empty && ob.collision_request_ticket != 0 && current_collision_result) {
+				PendingCollisionPublication pending;
+				pending.position = ob.position;
+				pending.lod_index = ob.lod;
+				pending.ticket = ob.collision_request_ticket;
+				pending.due_physics_frame = Engine::get_singleton()->get_physics_frames() + 2;
+				pending.empty = true;
+				_pending_collision_publications.push_back(pending);
+			}
 			if (ob.collision_request_ticket != 0 && current_collision_result && collision_shape.is_valid()) {
 				PendingCollisionPublication pending;
 				pending.position = ob.position;
@@ -2209,6 +2270,7 @@ void VoxelLodTerrain::apply_mesh_update(VoxelEngine::BlockMeshOutput &ob) {
 			}
 			*block->deferred_collider_data = std::move(ob.surfaces);
 			block->deferred_collision_request_ticket = ob.collision_request_ticket;
+			block->deferred_collision_is_empty = block->deferred_collider_data->collision_surface.indices.size() == 0;
 		}
 	}
 
@@ -2483,6 +2545,16 @@ void VoxelLodTerrain::process_deferred_collision_updates(uint32_t timeout_msec) 
 						_pending_collision_publications.push_back(pending);
 					}
 				}
+				if (!collision_shape.is_valid() && block->deferred_collision_is_empty &&
+						block->collision_request_ticket != 0) {
+					PendingCollisionPublication pending;
+					pending.position = block_pos;
+					pending.lod_index = lod_index;
+					pending.ticket = block->collision_request_ticket;
+					pending.due_physics_frame = Engine::get_singleton()->get_physics_frames() + 2;
+					pending.empty = true;
+					_pending_collision_publications.push_back(pending);
+				}
 
 				unordered_remove(deferred_collision_updates, i);
 				--i;
@@ -2496,6 +2568,27 @@ void VoxelLodTerrain::process_deferred_collision_updates(uint32_t timeout_msec) 
 	}
 }
 
+void VoxelLodTerrain::invalidate_collision_publications() {
+	_update_data->wait_for_end_of_task();
+	_collision_body_locations.clear();
+	_pending_collision_publications.clear();
+	for (unsigned int lod_index = 0; lod_index < _update_data->state.lods.size(); ++lod_index) {
+		VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[lod_index];
+		RWLockRead map_lock(lod.mesh_map_state.map_lock);
+		for (auto it = lod.mesh_map_state.map.begin(); it != lod.mesh_map_state.map.end(); ++it) {
+			it->second.expected_collision_ticket.store(0);
+		}
+	}
+	for (unsigned int lod_index = 0; lod_index < _collision_publications_per_lod.size(); ++lod_index) {
+		for (auto it = _collision_publications_per_lod[lod_index].begin();
+				it != _collision_publications_per_lod[lod_index].end(); ++it) {
+			it->second.publication.clear();
+			it->second.current_body = RID();
+			it->second.pending_ticket = 0;
+		}
+	}
+}
+
 void VoxelLodTerrain::process_collision_publications() {
 	const uint64_t physics_frame = Engine::get_singleton()->get_physics_frames();
 	for (unsigned int i = 0; i < _pending_collision_publications.size(); ++i) {
@@ -2503,9 +2596,9 @@ void VoxelLodTerrain::process_collision_publications() {
 		if (physics_frame < pending.due_physics_frame) {
 			continue;
 		}
-		unordered_remove(_pending_collision_publications, i);
-		--i;
 		if (pending.lod_index >= get_lod_count()) {
+			unordered_remove(_pending_collision_publications, i);
+			--i;
 			continue;
 		}
 		VoxelLodTerrainUpdateData::Lod &lod = _update_data->state.lods[pending.lod_index];
@@ -2516,6 +2609,8 @@ void VoxelLodTerrain::process_collision_publications() {
 		const bool current = state_it != lod.mesh_map_state.map.end() &&
 				state_it->second.expected_collision_ticket.load() == pending.ticket;
 		lod.mesh_map_state.map_lock.read_unlock();
+		unordered_remove(_pending_collision_publications, i);
+		--i;
 		if (!current) {
 			continue;
 		}

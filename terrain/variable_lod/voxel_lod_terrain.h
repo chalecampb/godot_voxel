@@ -345,6 +345,7 @@ private:
 
 	void process_deferred_collision_updates(uint32_t timeout_msec);
 	void process_collision_publications();
+	void invalidate_collision_publications();
 	void process_fading_blocks(float delta);
 
 	struct LocalCameraInfo {

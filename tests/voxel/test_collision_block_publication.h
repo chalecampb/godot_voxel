@@ -16,6 +16,7 @@ void test_collision_request_ticket_defaults_on_task_and_output();
 void test_collision_block_result_selection_preserves_current_over_stale_arrival();
 void test_collision_segment_coverage_closed_intersections();
 void test_collision_segment_coverage_rejects_invalid_and_over_budget_inputs();
+void test_collision_segment_coverage_default_status_is_unavailable();
 
 } // namespace zylann::voxel::tests
 
