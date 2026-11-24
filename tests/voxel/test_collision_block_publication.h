@@ -13,6 +13,9 @@ void test_collision_block_publication_preserves_unaffected_block();
 void test_collision_request_tickets_are_positive_and_per_volume();
 void test_collision_request_ticket_sequence_survives_publication_clear();
 void test_collision_request_ticket_defaults_on_task_and_output();
+void test_collision_block_result_selection_preserves_current_over_stale_arrival();
+void test_collision_segment_coverage_closed_intersections();
+void test_collision_segment_coverage_rejects_invalid_and_over_budget_inputs();
 
 } // namespace zylann::voxel::tests
 

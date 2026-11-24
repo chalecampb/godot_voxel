@@ -2,6 +2,7 @@
 #include "../../engine/voxel_engine.h"
 #include "../../meshers/mesh_block_task.h"
 #include "../../terrain/variable_lod/collision_block_publication.h"
+#include "../../terrain/variable_lod/collision_segment_coverage.h"
 #include "../../util/testing/test_macros.h"
 
 namespace zylann::voxel::tests {
@@ -148,6 +149,40 @@ void test_collision_request_ticket_defaults_on_task_and_output() {
 
 	ZN_TEST_ASSERT(task.collision_request_ticket == 0);
 	ZN_TEST_ASSERT(output.collision_request_ticket == 0);
+}
+
+// Requirements: WRLD-10, WRLD-17, WRLD-21
+void test_collision_block_result_selection_preserves_current_over_stale_arrival() {
+	// A late stale or visual-only result must not displace an already queued current collision result.
+	ZN_TEST_ASSERT(CollisionBlockPublication::is_current_result(41, 41));
+	ZN_TEST_ASSERT(CollisionBlockPublication::is_current_result(0, 41) == false);
+	ZN_TEST_ASSERT(CollisionBlockPublication::is_current_result(40, 41) == false);
+	ZN_TEST_ASSERT(CollisionBlockPublication::is_current_result(41, 42) == false);
+}
+
+// Requirements: WRLD-10, WRLD-17, WRLD-21
+void test_collision_segment_coverage_closed_intersections() {
+	using Coverage = CollisionSegmentCoverage;
+	ZN_TEST_ASSERT(Coverage::segment_intersects_closed_box(
+			Vector3(-1, 0.5, 0.5), Vector3(2, 0.5, 0.5), Vector3(0, 0, 0), Vector3(1, 1, 1)));
+	ZN_TEST_ASSERT(Coverage::segment_intersects_closed_box(
+			Vector3(1, 1, -1), Vector3(1, 1, 2), Vector3(0, 0, 0), Vector3(1, 1, 1)));
+	ZN_TEST_ASSERT(Coverage::segment_intersects_closed_box(
+			Vector3(-1, -1, -1), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(1, 1, 1)));
+	ZN_TEST_ASSERT(Coverage::segment_intersects_closed_box(
+			Vector3(0.5, 0.5, 0.5), Vector3(0.5, 0.5, 0.5), Vector3(0, 0, 0), Vector3(1, 1, 1)));
+	ZN_TEST_ASSERT(Coverage::segment_intersects_closed_box(
+			Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(1, 1, 1)));
+}
+
+// Requirements: WRLD-10, WRLD-17, WRLD-21
+void test_collision_segment_coverage_rejects_invalid_and_over_budget_inputs() {
+	using Coverage = CollisionSegmentCoverage;
+	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 1));
+	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 32));
+	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 0) == false);
+	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 33) == false);
+	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(INFINITY, 0, 0), Vector3(1, 1, 1), 1) == false);
 }
 
 } // namespace zylann::voxel::tests
