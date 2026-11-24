@@ -2,18 +2,15 @@
 #define VOXEL_COLLISION_SEGMENT_COVERAGE_H
 
 #include "../../util/godot/core/vector3.h"
-#include "../../util/godot/classes/ref_counted.h"
-#include "../../util/godot/core/class_db.h"
 
 #include <cmath>
 #include <cstdint>
 
 namespace zylann::voxel {
 
-// Geometry and query-bound helpers shared by VoxelLodTerrain's nonblocking coverage query.
-class CollisionSegmentCoverage : public RefCounted {
-	GDCLASS(CollisionSegmentCoverage, RefCounted)
-public:
+// Pure helpers shared by VoxelLodTerrain's nonblocking collision-coverage query. The query returns a plain status
+// value, so hot gameplay reads allocate nothing.
+struct CollisionSegmentCoverage {
 	enum Status : uint8_t {
 		COLLISION_SEGMENT_READY,
 		COLLISION_SEGMENT_UNAVAILABLE,
@@ -22,21 +19,16 @@ public:
 		COLLISION_SEGMENT_UNSUPPORTED
 	};
 
-	Status status = COLLISION_SEGMENT_UNAVAILABLE;
-	unsigned int leaf_count = 0;
+	// Largest accepted leaf budget. Larger positive requests are capped to it.
+	static constexpr int MAX_LEAVES = 32;
 
-	Status get_status() const {
-		return status;
+	// Non-positive budgets are invalid; the endpoints must be finite.
+	static bool is_valid_query(const Vector3 &from, const Vector3 &to, int max_leaves) {
+		return is_finite(from) && is_finite(to) && max_leaves > 0;
 	}
 
-	unsigned int get_leaf_count() const {
-		return leaf_count;
-	}
-
-	static void _bind_methods();
-
-	static bool is_valid_query(const Vector3 &from, const Vector3 &to, unsigned int max_leaves) {
-		return is_finite(from) && is_finite(to) && max_leaves > 0 && max_leaves <= 32;
+	static unsigned int clamp_max_leaves(int max_leaves) {
+		return max_leaves > MAX_LEAVES ? unsigned(MAX_LEAVES) : unsigned(max_leaves);
 	}
 
 	// Closed slab test: touching a face, edge, or corner counts as an intersection.
@@ -80,24 +72,6 @@ private:
 		return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
 	}
 };
-
-} // namespace zylann::voxel
-
-VARIANT_ENUM_CAST(zylann::voxel::CollisionSegmentCoverage::Status)
-
-namespace zylann::voxel {
-
-inline void CollisionSegmentCoverage::_bind_methods() {
-	ClassDB::bind_method(D_METHOD("get_status"), &CollisionSegmentCoverage::get_status);
-	ClassDB::bind_method(D_METHOD("get_leaf_count"), &CollisionSegmentCoverage::get_leaf_count);
-	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_READY);
-	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_UNAVAILABLE);
-	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_OVER_BUDGET);
-	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_INVALID);
-	BIND_ENUM_CONSTANT(COLLISION_SEGMENT_UNSUPPORTED);
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "status"), "", "get_status");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "leaf_count"), "", "get_leaf_count");
-}
 
 } // namespace zylann::voxel
 

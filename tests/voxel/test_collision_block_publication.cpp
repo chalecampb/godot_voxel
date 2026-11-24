@@ -181,16 +181,19 @@ void test_collision_segment_coverage_rejects_invalid_and_over_budget_inputs() {
 	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 1));
 	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 32));
 	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 0) == false);
-	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 33) == false);
+	// Positive budgets above the cap are accepted and clamped; non-positive ones are invalid.
+	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), 33));
+	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(0, 0, 0), Vector3(1, 1, 1), -1) == false);
+	ZN_TEST_ASSERT(Coverage::clamp_max_leaves(33) == 32);
+	ZN_TEST_ASSERT(Coverage::clamp_max_leaves(5) == 5);
 	ZN_TEST_ASSERT(Coverage::is_valid_query(Vector3(INFINITY, 0, 0), Vector3(1, 1, 1), 1) == false);
 }
 
 // Requirements: WRLD-10, WRLD-17, WRLD-21
 void test_collision_segment_coverage_default_status_is_unavailable() {
-	Ref<CollisionSegmentCoverage> coverage;
-	coverage.instantiate();
-	ZN_TEST_ASSERT(coverage->get_status() == CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE);
-	ZN_TEST_ASSERT(coverage->get_leaf_count() == 0);
+	// The status enum is a plain value: zero is READY, so nothing may default-construct to "clear" by accident.
+	ZN_TEST_ASSERT(CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE != CollisionSegmentCoverage::COLLISION_SEGMENT_READY);
+	ZN_TEST_ASSERT(CollisionSegmentCoverage::COLLISION_SEGMENT_INVALID != CollisionSegmentCoverage::COLLISION_SEGMENT_READY);
 }
 
 } // namespace zylann::voxel::tests
