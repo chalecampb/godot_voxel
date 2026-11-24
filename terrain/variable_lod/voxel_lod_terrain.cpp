@@ -2958,7 +2958,7 @@ Ref<CollisionSegmentCoverage> VoxelLodTerrain::query_collision_segment_coverage(
 				return;
 			}
 			const CollisionPublicationRecord &record = record_it->second;
-			VoxelMeshBlockVLT *block = _mesh_maps_per_lod[lod_index].get_block(position);
+			const VoxelMeshBlockVLT *block = _mesh_maps_per_lod[lod_index].get_block(position);
 			if (record.publication.get_state() == CollisionBlockPublication::State::BODY) {
 				if (block == nullptr || !block->has_collision_shape() ||
 						block->collision_request_ticket != expected_ticket || block->get_collision_body_rid() != record.current_body) {
