@@ -291,7 +291,6 @@ void initialize_voxel_module(ModuleInitializationLevel p_level) {
 		ClassDB::register_abstract_class<VoxelNode>();
 		ClassDB::register_class<VoxelTerrain>();
 		ClassDB::register_class<VoxelLodTerrain>();
-		ClassDB::register_class<CollisionSegmentCoverage>();
 		ClassDB::register_class<VoxelViewer>();
 
 		// Streams

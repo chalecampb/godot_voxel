@@ -941,6 +941,8 @@ void unview_mesh_box(
 				}
 
 				if (collision_flag && !collision_needed) {
+					// Last collision viewer left: any in-flight or published result is no longer trustworthy.
+					mesh_block.expected_collision_ticket.store(0);
 					// Unload colliders to save memory
 					lod.mesh_blocks_to_drop_collision.push_back(bpos);
 				}
