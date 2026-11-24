@@ -40,6 +40,10 @@ bool DirectStaticBody::is_valid() const {
 	return _body.is_valid();
 }
 
+RID DirectStaticBody::get_rid() const {
+	return _body;
+}
+
 void DirectStaticBody::set_transform(Transform3D transform) {
 	ZN_PROFILE_SCOPE();
 	ERR_FAIL_COND(!_body.is_valid());

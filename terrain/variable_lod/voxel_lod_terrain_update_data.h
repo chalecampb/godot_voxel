@@ -133,6 +133,9 @@ struct VoxelLodTerrainUpdateData {
 		// Read by threaded update to decide when to subdivide LODs.
 		std::atomic_bool visual_loaded;
 		std::atomic_bool collision_loaded;
+		// Zero means that this block currently has no collision publication request.
+		// Main-thread receipt reads it while holding map_lock; the update task writes atomically.
+		std::atomic<uint64_t> expected_collision_ticket;
 
 		// bool pending_update_has_visuals;
 		// bool pending_update_has_collision;
@@ -145,7 +148,8 @@ struct VoxelLodTerrainUpdateData {
 				visual_active(false),
 				collision_active(false),
 				visual_loaded(false),
-				collision_loaded(false) {}
+				collision_loaded(false),
+				expected_collision_ticket(0) {}
 	};
 
 	// Version of the mesh map designed to be mainly used for the threaded update task.
