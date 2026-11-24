@@ -125,8 +125,8 @@ struct VoxelLodTerrainUpdateData {
 		int update_list_index;
 
 		uint8_t transition_mask;
-		bool visual_active;
-		bool collision_active;
+		std::atomic_bool visual_active;
+		std::atomic_bool collision_active;
 
 		// Tells whether the first meshing was done since this block was added.
 		// Written by the main thread only, when it receives mesh updates or when it unloads resources.
@@ -177,6 +177,7 @@ struct VoxelLodTerrainUpdateData {
 		Vector3i position;
 		TaskCancellationToken cancellation_token;
 		bool require_visual = false;
+		uint64_t collision_request_ticket = 0;
 	};
 
 	struct QuickReloadingBlock {
