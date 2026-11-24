@@ -1,4 +1,6 @@
 #include "test_collision_block_publication.h"
+#include "../../engine/voxel_engine.h"
+#include "../../meshers/mesh_block_task.h"
 #include "../../terrain/variable_lod/collision_block_publication.h"
 #include "../../util/testing/test_macros.h"
 
@@ -105,6 +107,47 @@ void test_collision_block_publication_preserves_unaffected_block() {
 	ZN_TEST_ASSERT(edited_block.get_state() == PublicationState::UNAVAILABLE);
 	ZN_TEST_ASSERT(unaffected_block.get_ticket() == 41);
 	ZN_TEST_ASSERT(unaffected_block.get_state() == PublicationState::EMPTY);
+}
+
+// Requirements: WRLD-10, WRLD-17, WRLD-21
+void test_collision_request_tickets_are_positive_and_per_volume() {
+	CollisionRequestTickets first_volume;
+	CollisionRequestTickets second_volume;
+
+	const uint64_t first_ticket = first_volume.issue();
+	const uint64_t second_ticket = first_volume.issue();
+	const uint64_t independent_ticket = second_volume.issue();
+
+	ZN_TEST_ASSERT(first_ticket == 1);
+	ZN_TEST_ASSERT(second_ticket == 2);
+	ZN_TEST_ASSERT(independent_ticket == 1);
+	ZN_TEST_ASSERT(first_ticket != 0);
+	ZN_TEST_ASSERT(second_ticket != 0);
+	ZN_TEST_ASSERT(independent_ticket != 0);
+}
+
+// Requirements: WRLD-10, WRLD-17, WRLD-21
+void test_collision_request_ticket_sequence_survives_publication_clear() {
+	CollisionRequestTickets tickets;
+	CollisionBlockPublication publication;
+
+	const uint64_t first_ticket = tickets.issue();
+	publication.begin_request(first_ticket);
+	publication.clear();
+	const uint64_t second_ticket = tickets.issue();
+
+	ZN_TEST_ASSERT(publication.get_ticket() == 0);
+	ZN_TEST_ASSERT(first_ticket == 1);
+	ZN_TEST_ASSERT(second_ticket == 2);
+}
+
+// Requirements: WRLD-10, WRLD-17, WRLD-21
+void test_collision_request_ticket_defaults_on_task_and_output() {
+	MeshBlockTask task;
+	VoxelEngine::BlockMeshOutput output;
+
+	ZN_TEST_ASSERT(task.collision_request_ticket == 0);
+	ZN_TEST_ASSERT(output.collision_request_ticket == 0);
 }
 
 } // namespace zylann::voxel::tests
