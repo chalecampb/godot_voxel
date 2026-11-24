@@ -11,6 +11,7 @@
 #include "../../util/safe_ref_count.h"
 #include "../../util/tasks/cancellation_token.h"
 #include "../voxel_mesh_map.h"
+#include "collision_block_publication.h"
 #include "lod_octree.h"
 
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
@@ -327,6 +328,8 @@ struct VoxelLodTerrainUpdateData {
 		ClipboxStreamingState clipbox_streaming;
 
 		FixedArray<Lod, constants::MAX_LOD> lods;
+		// Per-volume update-task source; it intentionally survives mesh-map resets.
+		CollisionRequestTickets collision_request_tickets;
 
 		EditNotificationInputs edit_notifications;
 

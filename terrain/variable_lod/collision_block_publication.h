@@ -2,8 +2,31 @@
 #define VOXEL_COLLISION_BLOCK_PUBLICATION_H
 
 #include <cstdint>
+#include <limits>
 
 namespace zylann::voxel {
+
+// Worker-owned monotonic request IDs for one terrain volume. Do not reset this source when mesh maps are rebuilt.
+class CollisionRequestTickets {
+public:
+	uint64_t issue() {
+		if (_exhausted) {
+			return 0;
+		}
+
+		const uint64_t ticket = _next_ticket;
+		if (_next_ticket == std::numeric_limits<uint64_t>::max()) {
+			_exhausted = true;
+		} else {
+			++_next_ticket;
+		}
+		return ticket;
+	}
+
+private:
+	uint64_t _next_ticket = 1;
+	bool _exhausted = false;
+};
 
 // Tracks whether the current request for a collision block has been physically published.
 // The terrain owns synchronization and must call publish_* only after its physics publication fence.
