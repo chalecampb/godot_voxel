@@ -1,6 +1,8 @@
 #ifndef VOXEL_ENGINE_H
 #define VOXEL_ENGINE_H
 
+#include <cstdint>
+
 #include "../meshers/voxel_mesher.h"
 #include "../util/containers/slot_map.h"
 #include "../util/containers/std_vector.h"
@@ -47,6 +49,8 @@ public:
 		};
 
 		Type type;
+		// Zero means this output was not issued as a collision publication candidate.
+		uint64_t collision_request_ticket = 0;
 		VoxelMesher::Output surfaces;
 		// Only used if `has_mesh_resource` is true (usually when meshes are allowed to be build in threads). Otherwise,
 		// mesh data will be in `surfaces` and has to be built on the main thread.

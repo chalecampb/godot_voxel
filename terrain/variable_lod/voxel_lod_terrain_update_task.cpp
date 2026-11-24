@@ -339,6 +339,10 @@ void send_mesh_requests(
 			task->data = data_ptr;
 			task->require_visual = mesh_to_update.require_visual;
 			task->collision_hint = settings.collision_enabled;
+			if (settings.streaming_system == VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX &&
+				settings.collision_enabled && mesh_block.collision_viewers.get() > 0) {
+				task->collision_request_ticket = state.collision_request_tickets.issue();
+			}
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
 			task->detail_texture_settings = settings.detail_texture_settings;
 			task->detail_texture_generator_override = settings.detail_texture_generator_override;
