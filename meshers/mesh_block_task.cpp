@@ -629,6 +629,7 @@ void MeshBlockTask::apply_result() {
 		// invalid.
 		if (meshing_dependency->valid) {
 			VoxelEngine::BlockMeshOutput o;
+			o.collision_request_ticket = collision_request_ticket;
 			// TODO Check for invalidation due to property changes
 
 			if (_has_run) {
