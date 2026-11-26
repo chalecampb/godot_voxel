@@ -24,6 +24,11 @@ class BufferedTaskScheduler;
 //
 class VoxelLodTerrainUpdateTask : public IThreadedTask {
 public:
+	enum class MeshUpdatePolicy : uint8_t {
+		ACTIVE_ONLY,
+		REQUESTED
+	};
+
 	VoxelLodTerrainUpdateTask( 
 			std::shared_ptr<VoxelData> p_data, 
 			std::shared_ptr<VoxelLodTerrainUpdateData> p_update_data, 
@@ -69,8 +74,10 @@ public:
 			VoxelLodTerrainUpdateData::MeshBlockState &block,
 			const Vector3i bpos,
 			StdVector<VoxelLodTerrainUpdateData::MeshToUpdate> &blocks_pending_update,
-			const bool require_visual
+			const bool require_visual,
+			const MeshUpdatePolicy policy = MeshUpdatePolicy::ACTIVE_ONLY
 	) {
+		static_cast<void>(policy);
 		if (block.state != VoxelLodTerrainUpdateData::MESH_UPDATE_NOT_SENT) {
 			if (block.visual_active || block.collision_active) {
 				// Schedule an update

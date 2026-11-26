@@ -1,0 +1,16 @@
+#ifndef VOXEL_TESTS_LOD_MESH_UPDATE_SCHEDULING_H
+#define VOXEL_TESTS_LOD_MESH_UPDATE_SCHEDULING_H
+
+namespace zylann::voxel::tests {
+
+void test_lod_mesh_update_scheduling_requested_collision_only();
+void test_lod_mesh_update_scheduling_requested_visual_only();
+void test_lod_mesh_update_scheduling_requested_without_demand_stays_parked();
+void test_lod_mesh_update_scheduling_active_only_preserves_inactive_demand();
+void test_lod_mesh_update_scheduling_default_active_block();
+void test_lod_mesh_update_scheduling_not_sent_is_deduplicated();
+void test_lod_mesh_update_scheduling_never_realized_stays_parked();
+
+} // namespace zylann::voxel::tests
+
+#endif // VOXEL_TESTS_LOD_MESH_UPDATE_SCHEDULING_H
