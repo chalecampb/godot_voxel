@@ -24,10 +24,7 @@ class BufferedTaskScheduler;
 //
 class VoxelLodTerrainUpdateTask : public IThreadedTask {
 public:
-	enum class MeshUpdatePolicy : uint8_t {
-		ACTIVE_ONLY,
-		REQUESTED
-	};
+	enum class MeshUpdatePolicy : uint8_t { ACTIVE_ONLY, REQUESTED };
 
 	VoxelLodTerrainUpdateTask( 
 			std::shared_ptr<VoxelData> p_data, 
@@ -77,15 +74,16 @@ public:
 			const bool require_visual,
 			const MeshUpdatePolicy policy = MeshUpdatePolicy::ACTIVE_ONLY
 	) {
-		static_cast<void>(policy);
 		if (block.state != VoxelLodTerrainUpdateData::MESH_UPDATE_NOT_SENT) {
-			if (block.visual_active || block.collision_active) {
+			const bool requested_and_loaded = policy == MeshUpdatePolicy::REQUESTED &&
+					(block.mesh_viewers.get() > 0 || block.collision_viewers.get() > 0) &&
+					(block.visual_loaded.load() || block.collision_loaded.load());
+			if (block.visual_active || block.collision_active || requested_and_loaded) {
 				// Schedule an update
 				block.state = VoxelLodTerrainUpdateData::MESH_UPDATE_NOT_SENT;
 				block.update_list_index = blocks_pending_update.size();
-				blocks_pending_update.push_back(
-						VoxelLodTerrainUpdateData::MeshToUpdate{ bpos, TaskCancellationToken(), require_visual }
-				);
+				blocks_pending_update.push_back(VoxelLodTerrainUpdateData::MeshToUpdate{
+						bpos, TaskCancellationToken(), require_visual });
 			} else {
 				// Just mark it as needing update, so the visibility system will schedule its update when needed.
 				block.state = VoxelLodTerrainUpdateData::MESH_NEED_UPDATE;
