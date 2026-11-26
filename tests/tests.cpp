@@ -18,6 +18,7 @@
 #include "voxel/test_collision_block_publication.h"
 #include "voxel/test_curve_range.h"
 #include "voxel/test_edition_funcs.h"
+#include "voxel/test_lod_mesh_update_scheduling.h"
 #include "voxel/test_octree.h"
 #include "voxel/test_raycast.h"
 #include "voxel/test_region_file.h"
@@ -121,6 +122,13 @@ void run_voxel_tests(const testing::TestOptions &options) {
 	VOXEL_TEST(test_octree_update);
 	VOXEL_TEST(test_octree_find_in_box);
 	VOXEL_TEST(test_get_curve_monotonic_sections);
+	VOXEL_TEST(test_lod_mesh_update_scheduling_requested_collision_only);
+	VOXEL_TEST(test_lod_mesh_update_scheduling_requested_visual_only);
+	VOXEL_TEST(test_lod_mesh_update_scheduling_requested_without_demand_stays_parked);
+	VOXEL_TEST(test_lod_mesh_update_scheduling_active_only_preserves_inactive_demand);
+	VOXEL_TEST(test_lod_mesh_update_scheduling_default_active_block);
+	VOXEL_TEST(test_lod_mesh_update_scheduling_not_sent_is_deduplicated);
+	VOXEL_TEST(test_lod_mesh_update_scheduling_never_realized_stays_parked);
 	VOXEL_TEST(test_voxel_buffer_create);
 	VOXEL_TEST(test_block_serializer);
 	VOXEL_TEST(test_collision_block_publication_default_and_queued_work);
