@@ -13,6 +13,7 @@
 #include "shader_material_pool_vlt.h"
 #include "voxel_lod_terrain_update_data.h"
 #include "voxel_mesh_block_vlt.h"
+#include "collision_segment_coverage.h"
 
 #ifdef TOOLS_ENABLED
 #include "../../util/godot/debug_renderer.h"
@@ -201,6 +202,27 @@ public:
 
 	bool is_area_meshed(const Box3i &box_in_voxels, unsigned int lod_index) const;
 
+	enum CollisionSegmentStatus : uint8_t { //
+		COLLISION_SEGMENT_READY = CollisionSegmentCoverage::COLLISION_SEGMENT_READY,
+		COLLISION_SEGMENT_UNAVAILABLE = CollisionSegmentCoverage::COLLISION_SEGMENT_UNAVAILABLE,
+		COLLISION_SEGMENT_OVER_BUDGET = CollisionSegmentCoverage::COLLISION_SEGMENT_OVER_BUDGET,
+		COLLISION_SEGMENT_INVALID = CollisionSegmentCoverage::COLLISION_SEGMENT_INVALID,
+		COLLISION_SEGMENT_UNSUPPORTED = CollisionSegmentCoverage::COLLISION_SEGMENT_UNSUPPORTED
+	};
+
+	// Ownership of a physics body returned by a raw direct-space query. UNAVAILABLE means the body is (or very
+	// recently was) a terrain body of this volume but cannot currently be trusted, so callers must stop the ray.
+	enum CollisionBodyOwnership : uint8_t { //
+		COLLISION_BODY_FOREIGN,
+		COLLISION_BODY_UNAVAILABLE,
+		COLLISION_BODY_CURRENT
+	};
+
+	// Main thread only. Reads the applied, fenced collision partition and never samples, generates, waits or schedules.
+	CollisionSegmentStatus query_collision_segment_coverage(Vector3 local_from, Vector3 local_to, int max_leaves) const;
+	CollisionBodyOwnership classify_collision_body(RID body) const;
+	bool owns_current_collision_body(RID body) const;
+
 	enum StreamingSystem : uint8_t { //
 		STREAMING_SYSTEM_LEGACY_OCTREE = VoxelLodTerrainUpdateData::STREAMING_SYSTEM_LEGACY_OCTREE,
 		STREAMING_SYSTEM_CLIPBOX = VoxelLodTerrainUpdateData::STREAMING_SYSTEM_CLIPBOX
@@ -333,9 +355,11 @@ private:
 
 	void update_shader_material_pool_template();
 
-	void save_all_modified_blocks(bool with_copy, std::shared_ptr<AsyncDependencyTracker> tracker);
+	void save_all_modified_blocks(bool with_copy, std::shared_ptr<AsyncDependencyTracker> tracker) override;
 
 	void process_deferred_collision_updates(uint32_t timeout_msec);
+	void process_collision_publications();
+	void invalidate_collision_publications();
 	void process_fading_blocks(float delta);
 
 	struct LocalCameraInfo {
@@ -351,7 +375,6 @@ private:
 
 	// Bindings
 
-	Ref<VoxelSaveCompletionTracker> _b_save_modified_blocks();
 	void _b_set_voxel_bounds(AABB aabb);
 	AABB _b_get_voxel_bounds() const;
 
@@ -408,6 +431,38 @@ private:
 	float _collision_margin = constants::DEFAULT_COLLISION_MARGIN;
 	int _collision_update_delay = 0;
 	FixedArray<StdVector<Vector3i>, constants::MAX_LOD> _deferred_collision_updates_per_lod;
+
+	struct CollisionPublicationRecord {
+		CollisionBlockPublication publication;
+		RID current_body;
+		uint64_t pending_ticket = 0;
+		uint64_t pending_physics_frame = 0;
+		bool pending_empty = false;
+		// Main-thread view of the collision partition: whether this key's collider was last enabled or disabled
+		// by main-thread processing, and the physics frame after which that change is observable by queries.
+		bool applied_active = false;
+		uint64_t active_due_frame = 0;
+	};
+	struct PendingCollisionPublication {
+		Vector3i position;
+		uint8_t lod_index = 0;
+		uint64_t ticket = 0;
+		uint64_t due_physics_frame = 0;
+		RID body;
+		bool empty = false;
+	};
+	FixedArray<StdUnorderedMap<Vector3i, CollisionPublicationRecord>, constants::MAX_LOD>
+			_collision_publications_per_lod;
+	StdVector<PendingCollisionPublication> _pending_collision_publications;
+	// Native membership index of installed terrain bodies (set at install, before any certification).
+	StdUnorderedMap<uint64_t, VoxelLodTerrainUpdateData::BlockLocation> _collision_body_locations;
+	// Bodies that left the index, kept (by RID id -> physics frame) until a raw query can no longer return them.
+	StdUnorderedMap<uint64_t, uint64_t> _retiring_collision_bodies;
+
+	void apply_collision_partition(unsigned int lod_index, Vector3i position, bool active, bool force_fence = false);
+	void retire_collision_body(RID body);
+	void register_installed_collision_body(const VoxelMeshBlockVLT &block, unsigned int lod_index);
+	bool is_collision_leaf_current(unsigned int lod_index, Vector3i position, uint64_t expected_ticket) const;
 
 	float _lod_fade_duration = 0.f;
 	// Note, direct pointers to mesh blocks should be safe because these blocks are always destroyed from the same
@@ -480,5 +535,7 @@ private:
 VARIANT_ENUM_CAST(zylann::voxel::VoxelLodTerrain::ProcessCallback)
 VARIANT_ENUM_CAST(zylann::voxel::VoxelLodTerrain::DebugDrawFlag)
 VARIANT_ENUM_CAST(zylann::voxel::VoxelLodTerrain::StreamingSystem);
+VARIANT_ENUM_CAST(zylann::voxel::VoxelLodTerrain::CollisionSegmentStatus);
+VARIANT_ENUM_CAST(zylann::voxel::VoxelLodTerrain::CollisionBodyOwnership);
 
 #endif // VOXEL_LOD_TERRAIN_HPP

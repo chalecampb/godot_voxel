@@ -40,6 +40,7 @@
 #include "terrain/fixed_lod/voxel_terrain.h"
 #include "terrain/fixed_lod/voxel_terrain_multiplayer_synchronizer.h"
 #include "terrain/variable_lod/voxel_lod_terrain.h"
+#include "terrain/variable_lod/collision_segment_coverage.h"
 #include "terrain/voxel_a_star_grid_3d.h"
 #include "terrain/voxel_mesh_block.h"
 #include "terrain/voxel_save_completion_tracker.h"
@@ -596,10 +597,12 @@ void uninitialize_voxel_module(ModuleInitializationLevel p_level) {
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
 		VoxelMesherTransvoxel::free_static_resources();
 #endif
+		zylann::voxel::godot::VoxelEngine::destroy_singleton();
+		// Destroying the engine releases tasks which were still queued or interrupted at exit. Their resources (such as
+		// generators) can use string names and graph node types while they are destroyed, so these must outlive it.
+		VoxelEngine::destroy_singleton();
 		VoxelStringNames::destroy_singleton();
 		pg::NodeTypeDB::destroy_singleton();
-		zylann::voxel::godot::VoxelEngine::destroy_singleton();
-		VoxelEngine::destroy_singleton();
 
 		// Do this last as VoxelEngine might still be holding some refs to voxel blocks
 		VoxelMemoryPool::destroy_singleton();

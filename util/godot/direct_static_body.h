@@ -4,6 +4,7 @@
 #include "../non_copyable.h"
 #include "classes/shape_3d.h"
 #include "direct_mesh_instance.h"
+#include "core/rid.h"
 #include "macros.h"
 
 ZN_GODOT_FORWARD_DECLARE(class World3D);
@@ -19,6 +20,7 @@ public:
 	void create();
 	void destroy();
 	bool is_valid() const;
+	RID get_rid() const;
 	void set_transform(Transform3D transform);
 	void add_shape(Ref<Shape3D> shape);
 	void remove_shape(int shape_index);
