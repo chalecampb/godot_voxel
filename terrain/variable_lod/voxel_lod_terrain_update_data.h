@@ -11,6 +11,7 @@
 #include "../../util/safe_ref_count.h"
 #include "../../util/tasks/cancellation_token.h"
 #include "../voxel_mesh_map.h"
+#include "collision_block_publication.h"
 #include "lod_octree.h"
 
 #ifdef VOXEL_ENABLE_SMOOTH_MESHING
@@ -124,14 +125,17 @@ struct VoxelLodTerrainUpdateData {
 		int update_list_index;
 
 		uint8_t transition_mask;
-		bool visual_active;
-		bool collision_active;
+		std::atomic_bool visual_active;
+		std::atomic_bool collision_active;
 
 		// Tells whether the first meshing was done since this block was added.
 		// Written by the main thread only, when it receives mesh updates or when it unloads resources.
 		// Read by threaded update to decide when to subdivide LODs.
 		std::atomic_bool visual_loaded;
 		std::atomic_bool collision_loaded;
+		// Zero means that this block currently has no collision publication request.
+		// Main-thread receipt reads it while holding map_lock; the update task writes atomically.
+		std::atomic<uint64_t> expected_collision_ticket;
 
 		// bool pending_update_has_visuals;
 		// bool pending_update_has_collision;
@@ -144,7 +148,8 @@ struct VoxelLodTerrainUpdateData {
 				visual_active(false),
 				collision_active(false),
 				visual_loaded(false),
-				collision_loaded(false) {}
+				collision_loaded(false),
+				expected_collision_ticket(0) {}
 	};
 
 	// Version of the mesh map designed to be mainly used for the threaded update task.
@@ -172,6 +177,7 @@ struct VoxelLodTerrainUpdateData {
 		Vector3i position;
 		TaskCancellationToken cancellation_token;
 		bool require_visual = false;
+		uint64_t collision_request_ticket = 0;
 	};
 
 	struct QuickReloadingBlock {
@@ -327,6 +333,8 @@ struct VoxelLodTerrainUpdateData {
 		ClipboxStreamingState clipbox_streaming;
 
 		FixedArray<Lod, constants::MAX_LOD> lods;
+		// Per-volume update-task source; it intentionally survives mesh-map resets.
+		CollisionRequestTickets collision_request_tickets;
 
 		EditNotificationInputs edit_notifications;
 
